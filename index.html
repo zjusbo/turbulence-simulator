@@ -10,9 +10,13 @@
     --text:#dbe2ee; --muted:#8b96a8; --accent:#4da3ff; --accent2:#ff9d4d;
   }
   *{box-sizing:border-box; margin:0; padding:0;}
-  body{background:var(--bg); color:var(--text); font:14px/1.45 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; height:100vh; overflow:hidden;}
-  #app{display:flex; height:100vh;}
-  aside{width:272px; min-width:272px; background:var(--panel); border-right:1px solid var(--border); padding:14px; overflow-y:auto;}
+  body{background:var(--bg); color:var(--text); font:14px/1.45 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; height:100vh; height:100dvh; overflow:hidden; overscroll-behavior:none;}
+  #app{display:flex; height:100vh; height:100dvh;}
+  aside{width:272px; min-width:272px; background:var(--panel); border-right:1px solid var(--border); padding:14px; padding-top:52px; overflow-y:auto; transition:margin-left .25s ease, transform .25s ease; z-index:45;}
+  body.nav-collapsed aside{margin-left:-272px;}
+  #menuBtn{position:fixed; top:10px; left:10px; z-index:50; width:38px; height:38px; padding:0; font-size:17px; background:#161b24ee;}
+  #backdrop{position:fixed; inset:0; background:#0009; z-index:44; display:none;}
+  button, select, input{touch-action:manipulation;}
   h1{font-size:16px; margin-bottom:2px;}
   .sub{color:var(--muted); font-size:11px; margin-bottom:12px;}
   section{background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:10px;}
@@ -52,6 +56,21 @@
   #cv.panning{cursor:grabbing;}
   #zoomCtl{position:absolute; top:28px; right:8px; display:flex; flex-direction:column; gap:6px;}
   #zoomCtl button{width:32px; height:32px; padding:0; font-size:16px; background:#161b24dd;}
+  #shapeBar{position:absolute; top:26px; left:50%; transform:translateX(-50%); display:none; gap:6px; z-index:5;}
+  #shapeBar button{width:40px; height:36px; padding:0; font-size:16px; background:#161b24dd;}
+  @media (max-width:768px){
+    aside{position:fixed; top:0; left:0; bottom:0; box-shadow:4px 0 24px #000a; margin-left:0;}
+    body.nav-collapsed aside{margin-left:0; transform:translateX(-105%);}
+    body:not(.nav-collapsed) #backdrop{display:block;}
+    main{padding:6px; padding-top:54px; align-items:flex-start;}
+    .hint{display:none;}
+  }
+  @media (pointer:coarse){
+    button{min-height:40px;}
+    .pal{min-height:48px;}
+    #zoomCtl button{width:40px; height:40px;}
+    input[type=range]{height:28px;}
+  }
   #toast{position:absolute; bottom:28px; left:50%; transform:translateX(-50%); background:#1d2431ee; border:1px solid var(--border); border-radius:8px; padding:8px 16px; font-size:13px; opacity:0; transition:opacity .25s; pointer-events:none; max-width:80%;}
   #ghost{position:fixed; pointer-events:none; z-index:99; opacity:.7; display:none;}
   details{font-size:12px; color:var(--muted);}
@@ -60,6 +79,8 @@
 </style>
 </head>
 <body>
+<button id="menuBtn" title="Toggle panel">&#9776;</button>
+<div id="backdrop"></div>
 <div id="app">
   <aside>
     <h1>Wind Tunnel 2D</h1>
@@ -82,7 +103,7 @@
         <button id="drawBtn" title="Free-draw a closed shape">&#9998; Draw</button>
         <button id="clearBtn" title="Remove all objects">Clear</button>
       </div>
-      <div class="hint">Drag a shape onto the canvas (or click to place). Drag shape = move &middot; Shift+scroll on shape = resize &middot; double-click = delete. Scroll = zoom &middot; drag background = pan. Drawn shapes must be closed.</div>
+      <div class="hint">Drag a shape onto the canvas (or click to place). Tap/click a shape to select it, then use the +/&minus;/&#128465; toolbar (or Shift+scroll, double-click). Scroll or pinch = zoom &middot; drag background = pan. Drawn shapes must be closed.</div>
     </section>
 
     <section>
@@ -114,9 +135,9 @@
       <label class="chk"><input type="checkbox" id="showRotor" checked> Rotor (recirculation) zone</label>
       <div class="row"><label>Flow view</label>
         <select id="flowView">
-          <option value="auto" selected>Auto</option>
+          <option value="auto">Auto</option>
           <option value="lines">Streamlines</option>
-          <option value="arrows">Arrows</option>
+          <option value="arrows" selected>Arrows</option>
         </select>
       </div>
       <canvas id="legend" width="220" height="10"></canvas>
@@ -154,6 +175,11 @@
         <button id="zin" title="Zoom in">+</button>
         <button id="zout" title="Zoom out">&minus;</button>
         <button id="zreset" title="Reset view" style="font-size:13px">&#8634;</button>
+      </div>
+      <div id="shapeBar">
+        <button id="shrinkBtn" title="Shrink shape">&minus;</button>
+        <button id="growBtn" title="Enlarge shape">+</button>
+        <button id="delBtn" title="Delete shape">&#128465;</button>
       </div>
     </div>
     <div id="toast"></div>
@@ -619,12 +645,13 @@ function drawDrawPath() {
 }
 
 let turbLevel = 0, fpsAcc = 0, fpsN = 0, lastT = performance.now();
+let stepsPF = STEPS_PER_FRAME;               // adaptive: throttles on slow (mobile) devices
 function frame(now) {
   requestAnimationFrame(frame);
   if (barrierDirty) { rasterize(); buildMesh(); }
   else if (Math.abs(meshZoom - zoom) > 0.01) buildMesh();     // refine mesh on zoom change
   if (running) {
-    for (let s = 0; s < STEPS_PER_FRAME; s++) lbmStep();
+    for (let s = 0; s < stepsPF; s++) lbmStep();
     const tl = probeTurbulence();
     turbLevel = turbLevel*0.9 + tl*0.1;
   }
@@ -655,7 +682,12 @@ function frame(now) {
   const dt = now - lastT; lastT = now;
   fpsAcc += dt; fpsN++;
   if (fpsAcc > 500) {
-    document.getElementById('fpsVal').textContent = running ? Math.round(1000/(fpsAcc/fpsN)) : '–';
+    const fps = Math.round(1000/(fpsAcc/fpsN));
+    document.getElementById('fpsVal').textContent = running ? fps : '–';
+    if (running) {                            // auto performance scaling
+      if (fps < 28) stepsPF = Math.max(4, stepsPF - 1);
+      else if (fps > 52 && stepsPF < STEPS_PER_FRAME) stepsPF++;
+    }
     fpsAcc = 0; fpsN = 0;
   }
   if (running && (stepCount % 240) === 0 && !isFinite(f[0][(NY>>1)*NX + (NX>>1)])) initFluid();
@@ -673,6 +705,7 @@ function updateStatus() {
     const [bw, bh] = shapeBBox(selected);
     sv.textContent = selected.type === 'circle' ? `⌀ ${(bw/PPF).toFixed(1)} ft` : `${(bw/PPF).toFixed(1)} × ${(bh/PPF).toFixed(1)} ft`;
   } else sv.textContent = '–';
+  document.getElementById('shapeBar').style.display = selected ? 'flex' : 'none';
 }
 
 /* ================= Zoom / pan ================= */
@@ -717,6 +750,7 @@ document.getElementById('simBtn').addEventListener('click', () => {
     if (stepCount === 0) initFluid();
     b.innerHTML = '&#10074;&#10074; Pause';
     toast('Adaptive mesh generated → running CFD…');
+    if (isMobile()) setNav(true);            // free up screen for the canvas
   } else {
     b.innerHTML = '&#9654; Simulate';
     document.getElementById('regime').textContent = 'paused';
@@ -737,6 +771,28 @@ document.getElementById('drawBtn').addEventListener('click', () => {
 document.getElementById('zin').addEventListener('click', () => setZoom(zoom*1.4, W/2, H/2));
 document.getElementById('zout').addEventListener('click', () => setZoom(zoom/1.4, W/2, H/2));
 document.getElementById('zreset').addEventListener('click', () => { zoom = 1; panX = 0; panY = 0; document.getElementById('zoomVal').textContent = '1.0×'; });
+
+/* collapsible panel */
+const menuBtn = document.getElementById('menuBtn');
+const isMobile = () => matchMedia('(max-width: 768px)').matches;
+function setNav(collapsed) {
+  document.body.classList.toggle('nav-collapsed', collapsed);
+  menuBtn.innerHTML = collapsed ? '&#9776;' : '&#10005;';
+}
+menuBtn.addEventListener('click', () => setNav(!document.body.classList.contains('nav-collapsed')));
+document.getElementById('backdrop').addEventListener('click', () => setNav(true));
+setNav(isMobile());                          // start collapsed on small screens
+
+/* selected-shape toolbar (touch-friendly resize/delete) */
+document.getElementById('growBtn').addEventListener('click', () => {
+  if (selected) { scaleShape(selected, 1.15); barrierDirty = true; updateStatus(); }
+});
+document.getElementById('shrinkBtn').addEventListener('click', () => {
+  if (selected) { scaleShape(selected, 1/1.15); barrierDirty = true; updateStatus(); }
+});
+document.getElementById('delBtn').addEventListener('click', () => {
+  if (selected) { shapes = shapes.filter(s => s !== selected); selected = null; barrierDirty = true; updateStatus(); }
+});
 
 /* legend */
 (() => {
@@ -789,11 +845,24 @@ window.addEventListener('pointerup', e => {
   }
 });
 
-/* canvas interaction: draw / select / move / pan */
+/* canvas interaction: draw / select / move / pan / pinch-zoom */
 let dragShapeRef = null, lastPt = null, panning = false, panStart = null;
+const activePtrs = new Map();                // pointerId -> screen pos (multi-touch)
+let pinch = null;
 cv.addEventListener('pointerdown', e => {
-  const p = basePos(e);
+  const s = screenPos(e);
+  activePtrs.set(e.pointerId, s);
   cv.setPointerCapture(e.pointerId);
+  if (activePtrs.size === 2) {               // second finger => pinch zoom, cancel gestures
+    drawing = false; drawPts = [];
+    dragShapeRef = null; lastPt = null;
+    panning = false; cv.classList.remove('panning');
+    const [a, b] = [...activePtrs.values()];
+    pinch = { d0: Math.hypot(a.x-b.x, a.y-b.y) || 1, z0: zoom };
+    return;
+  }
+  if (activePtrs.size > 2) return;
+  const p = basePos(e);
   if (mode === 'draw') { drawing = true; drawPts = [p]; return; }
   selected = null;
   for (let i = shapes.length-1; i >= 0; i--) {
@@ -801,13 +870,19 @@ cv.addEventListener('pointerdown', e => {
   }
   if (selected) { dragShapeRef = selected; lastPt = p; }
   else {
-    const s = screenPos(e);
     panning = true; panStart = { sx: s.x, sy: s.y, px: panX, py: panY };
     cv.classList.add('panning');
   }
   updateStatus();
 });
 cv.addEventListener('pointermove', e => {
+  if (activePtrs.has(e.pointerId)) activePtrs.set(e.pointerId, screenPos(e));
+  if (pinch && activePtrs.size >= 2) {
+    const [a, b] = [...activePtrs.values()];
+    const d = Math.hypot(a.x-b.x, a.y-b.y) || 1;
+    setZoom(pinch.z0 * d/pinch.d0, (a.x+b.x)/2, (a.y+b.y)/2);
+    return;
+  }
   const p = basePos(e);
   mousePos = [p.x, p.y];
   if (drawing) {
@@ -825,7 +900,16 @@ cv.addEventListener('pointermove', e => {
 });
 cv.addEventListener('pointerleave', () => { mousePos = null; });
 cv.addEventListener('pointerup', e => {
+  activePtrs.delete(e.pointerId);
+  if (pinch) { if (activePtrs.size < 2) pinch = null; return; }
   if (drawing) { drawing = false; finishDrawing(); return; }
+  dragShapeRef = null; lastPt = null;
+  panning = false; cv.classList.remove('panning');
+});
+cv.addEventListener('pointercancel', e => {
+  activePtrs.delete(e.pointerId);
+  if (activePtrs.size < 2) pinch = null;
+  drawing = false; drawPts = [];
   dragShapeRef = null; lastPt = null;
   panning = false; cv.classList.remove('panning');
 });
