@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2D Wind Flow &amp; Turbulence Simulator</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b24; --panel2:#1d2431; --border:#2a3242;
+    --text:#dbe2ee; --muted:#8b96a8; --accent:#4da3ff; --accent2:#ff9d4d;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:var(--bg); color:var(--text); font:14px/1.45 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; height:100vh; overflow:hidden;}
+  #app{display:flex; height:100vh;}
+  aside{width:272px; min-width:272px; background:var(--panel); border-right:1px solid var(--border); padding:14px; overflow-y:auto;}
+  h1{font-size:16px; margin-bottom:2px;}
+  .sub{color:var(--muted); font-size:11px; margin-bottom:12px;}
+  section{background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:10px;}
+  section h2{font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-bottom:8px;}
+  .palette{display:flex; gap:8px;}
+  .pal{flex:1; aspect-ratio:1; background:var(--bg); border:1px solid var(--border); border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:grab; transition:border-color .15s;}
+  .pal:hover{border-color:var(--accent);}
+  .pal svg{pointer-events:none;}
+  .hint{color:var(--muted); font-size:11px; margin-top:8px;}
+  .row{display:flex; align-items:center; gap:8px; margin:6px 0;}
+  .row label{flex:1; color:var(--muted); font-size:12px;}
+  input[type=range]{flex:2; accent-color:var(--accent);}
+  .val{min-width:56px; text-align:right; font-variant-numeric:tabular-nums; font-size:12px;}
+  button{background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:7px 10px; font-size:13px; cursor:pointer; transition:all .15s;}
+  button:hover{border-color:var(--accent);}
+  button.primary{background:var(--accent); border-color:var(--accent); color:#06121f; font-weight:600;}
+  button.primary:hover{filter:brightness(1.1);}
+  button.active{background:#243147; border-color:var(--accent); color:var(--accent);}
+  .btnrow{display:flex; gap:8px; flex-wrap:wrap;}
+  .btnrow button{flex:1;}
+  .chk{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); margin:4px 0; cursor:pointer;}
+  select{background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px 6px; font-size:12px;}
+  #compass{width:64px; height:64px; border:1px solid var(--border); border-radius:50%; position:relative; background:var(--bg); flex:none;}
+  #arrow{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; transition:transform .1s;}
+  #legend{width:100%; height:10px; border-radius:5px; display:block; margin:4px 0 2px;}
+  .leg-lab{display:flex; justify-content:space-between; font-size:10px; color:var(--muted);}
+  .stat{display:flex; justify-content:space-between; font-size:12px; margin:3px 0;}
+  .stat b{font-variant-numeric:tabular-nums; font-weight:600;}
+  .badge{padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600;}
+  .badge.lam{background:#12324a; color:#5fc3ff;}
+  .badge.turb{background:#4a2312; color:#ffab5f;}
+  .badge.off{background:#242a36; color:var(--muted);}
+  main{flex:1; display:flex; align-items:center; justify-content:center; padding:12px; position:relative; min-width:0;}
+  #wrap{position:relative; width:100%; max-width:min(100%, calc((100vh - 24px) * 960 / 576));}
+  #cv{width:100%; height:auto; aspect-ratio:960/576; background:#0a0d12; border:1px solid var(--border); border-radius:12px; touch-action:none; display:block;}
+  #cv.draw{cursor:crosshair;}
+  #cv.panning{cursor:grabbing;}
+  #zoomCtl{position:absolute; top:28px; right:8px; display:flex; flex-direction:column; gap:6px;}
+  #zoomCtl button{width:32px; height:32px; padding:0; font-size:16px; background:#161b24dd;}
+  #toast{position:absolute; bottom:28px; left:50%; transform:translateX(-50%); background:#1d2431ee; border:1px solid var(--border); border-radius:8px; padding:8px 16px; font-size:13px; opacity:0; transition:opacity .25s; pointer-events:none; max-width:80%;}
+  #ghost{position:fixed; pointer-events:none; z-index:99; opacity:.7; display:none;}
+  details{font-size:12px; color:var(--muted);}
+  details summary{cursor:pointer; font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px;}
+  details li{margin:4px 0 4px 16px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <h1>Wind Tunnel 2D</h1>
+    <div class="sub">CFD wind flow &amp; turbulence &middot; 40 &times; 24 ft domain</div>
+
+    <section>
+      <h2>Objects</h2>
+      <div class="palette">
+        <div class="pal" data-shape="rect" title="Drag rectangle onto canvas (5 × 3 ft)">
+          <svg width="30" height="30"><rect x="4" y="8" width="22" height="14" fill="#3a465c" stroke="#8b96a8"/></svg>
+        </div>
+        <div class="pal" data-shape="tri" title="Drag triangle onto canvas">
+          <svg width="30" height="30"><polygon points="15,4 27,25 3,25" fill="#3a465c" stroke="#8b96a8"/></svg>
+        </div>
+        <div class="pal" data-shape="circle" title="Drag circle onto canvas">
+          <svg width="30" height="30"><circle cx="15" cy="15" r="11" fill="#3a465c" stroke="#8b96a8"/></svg>
+        </div>
+      </div>
+      <div class="btnrow" style="margin-top:8px">
+        <button id="drawBtn" title="Free-draw a closed shape">&#9998; Draw</button>
+        <button id="clearBtn" title="Remove all objects">Clear</button>
+      </div>
+      <div class="hint">Drag a shape onto the canvas (or click to place). Drag shape = move &middot; Shift+scroll on shape = resize &middot; double-click = delete. Scroll = zoom &middot; drag background = pan. Drawn shapes must be closed.</div>
+    </section>
+
+    <section>
+      <h2>Wind</h2>
+      <div class="row">
+        <div id="compass"><div id="arrow">
+          <svg width="40" height="40" viewBox="0 0 40 40"><path d="M4 20 H30 M30 20 L22 13 M30 20 L22 27" stroke="#4da3ff" stroke-width="3" fill="none" stroke-linecap="round"/></svg>
+        </div></div>
+        <div style="flex:1">
+          <div class="row"><label>Direction</label><span class="val" id="dirVal">0&deg;</span></div>
+          <input type="range" id="dir" min="0" max="359" value="0" style="width:100%">
+          <div class="row"><label>Speed</label><span class="val" id="spdVal">5 MPH</span></div>
+          <input type="range" id="spd" min="1" max="30" value="5" style="width:100%">
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="btnrow">
+        <button id="simBtn" class="primary">&#9654; Simulate</button>
+        <button id="resetBtn">Reset flow</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Display</h2>
+      <label class="chk"><input type="checkbox" id="showHeat" checked> Speed heatmap</label>
+      <label class="chk"><input type="checkbox" id="showMesh"> Adaptive mesh</label>
+      <label class="chk"><input type="checkbox" id="showRotor" checked> Rotor (recirculation) zone</label>
+      <div class="row"><label>Flow view</label>
+        <select id="flowView">
+          <option value="auto" selected>Auto</option>
+          <option value="lines">Streamlines</option>
+          <option value="arrows">Arrows</option>
+        </select>
+      </div>
+      <canvas id="legend" width="220" height="10"></canvas>
+      <div class="leg-lab"><span>0 MPH</span><span id="legMax">8 MPH</span></div>
+    </section>
+
+    <section>
+      <h2>Status</h2>
+      <div class="stat"><span>Regime</span><span class="badge off" id="regime">idle</span></div>
+      <div class="stat"><span>Rotor area</span><b id="rotorVal">&ndash;</b></div>
+      <div class="stat"><span>Reynolds №</span><b id="reVal">&ndash;</b></div>
+      <div class="stat"><span>Selected</span><b id="selVal">&ndash;</b></div>
+      <div class="stat"><span>Mesh cells</span><b id="meshVal">&ndash;</b></div>
+      <div class="stat"><span>Zoom</span><b id="zoomVal">1.0&times;</b></div>
+      <div class="stat"><span>FPS</span><b id="fpsVal">&ndash;</b></div>
+    </section>
+
+    <section>
+      <details>
+        <summary>How it works</summary>
+        <li>Domain is 40 &times; 24 ft; rulers show coordinates in feet.</li>
+        <li>Solver: lattice-Boltzmann (D2Q9) CFD with LES turbulence closure.</li>
+        <li>On Simulate, an adaptive quadtree mesh is generated and refined at object boundaries. Zooming in refines the mesh further.</li>
+        <li>Streamline colors map local wind speed in MPH (blue = slow, red = fast). Flow accelerates in constrictions (venturi effect).</li>
+        <li>The rotor zone highlights cells with reversed (recirculating) flow behind objects; its total area is reported in ft&sup2;.</li>
+        <li>When vortex shedding is detected the view shows an instantaneous single-frame field of direction &amp; strength arrows.</li>
+      </details>
+    </section>
+  </aside>
+
+  <main>
+    <div id="wrap">
+      <canvas id="cv" width="960" height="576"></canvas>
+      <div id="zoomCtl">
+        <button id="zin" title="Zoom in">+</button>
+        <button id="zout" title="Zoom out">&minus;</button>
+        <button id="zreset" title="Reset view" style="font-size:13px">&#8634;</button>
+      </div>
+    </div>
+    <div id="toast"></div>
+  </main>
+</div>
+<div id="ghost"></div>
+
+<script>
+"use strict";
+/* ================= Configuration ================= */
+/* World: 40 ft x 24 ft. Lattice 240x144 => 1 cell = 1/6 ft. Base canvas px: 4 px/cell => 24 px/ft. */
+const NX = 240, NY = 144, SCALE = 4;
+const W = 960, H = 576;
+const PPF = 24;                    // base px per foot
+const FT_PER_CELL = 1/6;
+const CELL_AREA_FT2 = FT_PER_CELL * FT_PER_CELL;
+const Q = 9;
+const ex = [0, 1, 0,-1, 0, 1,-1,-1, 1];
+const ey = [0, 0, 1, 0,-1, 1, 1,-1,-1];
+const wt = [4/9, 1/9,1/9,1/9,1/9, 1/36,1/36,1/36,1/36];
+const OPP = [0, 3, 4, 1, 2, 7, 8, 5, 6];
+const NU = 0.007;                  // lattice viscosity (solver)
+const TAU0 = 3*NU + 0.5;
+const CSMAG = 0.03;
+const STEPS_PER_FRAME = 10;
+const NU_AIR = 1.7e-4;             // air kinematic viscosity, ft^2/s (for physical Re display)
+const MPH2FTS = 5280/3600;
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+
+/* ================= State ================= */
+let shapes = [];                   // coords in base px (24 px = 1 ft)
+let running = false;
+let barrier = new Uint8Array(NX*NY);
+let barrierDirty = true;
+let meshRects = [];
+let meshFlashUntil = 0;
+let selected = null;
+let mode = 'select';
+let drawPts = [];
+let drawing = false;
+let stepCount = 0;
+let zoom = 1, panX = 0, panY = 0;
+let meshZoom = 1;
+let rotorAreaFt2 = 0;
+let mousePos = null;               // base-px coords for readout
+
+/* LBM fields */
+const N = NX*NY;
+let f = [], g = [];
+for (let k = 0; k < Q; k++) { f.push(new Float32Array(N)); g.push(new Float32Array(N)); }
+const UX = new Float32Array(N), UY = new Float32Array(N), SPD = new Float32Array(N);
+const FEQ = new Float32Array(Q);
+
+/* wind */
+function windMph() { return parseFloat(spd.value); }
+function windU0() { return 0.03 + (windMph()/30) * 0.09; }   // lattice units
+function windAngle() { return parseFloat(dir.value) * Math.PI/180; }
+function windVec() { const u = windU0(), a = windAngle(); return [u*Math.cos(a), u*Math.sin(a)]; }
+
+/* ================= Color map ================= */
+function hsl2rgb(h, s, l) {
+  const a = s * Math.min(l, 1-l);
+  const f2 = n => { const k = (n + h/30) % 12; return l - a * Math.max(-1, Math.min(k-3, 9-k, 1)); };
+  return [f2(0)*255, f2(8)*255, f2(4)*255];
+}
+const NLUT = 48;
+const LUT = [], LUTCSS = [];
+for (let i = 0; i < NLUT; i++) {
+  const t = i/(NLUT-1);
+  const rgb = hsl2rgb(225*(1-t), 0.85, 0.38 + 0.22*t);
+  LUT.push(rgb.map(Math.round));
+  LUTCSS.push(`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`);
+}
+function lutIdx(t) { return Math.max(0, Math.min(NLUT-1, (t*(NLUT-1))|0)); }
+
+/* ================= Geometry (base px) ================= */
+function insideShape(s, x, y) {
+  if (s.type === 'rect')   return x >= s.x && x <= s.x+s.w && y >= s.y && y <= s.y+s.h;
+  if (s.type === 'circle') { const dx = x-s.cx, dy = y-s.cy; return dx*dx + dy*dy <= s.r*s.r; }
+  const p = s.pts; let inside = false;
+  for (let i = 0, j = p.length-1; i < p.length; j = i++) {
+    if ((p[i].y > y) !== (p[j].y > y) &&
+        x < (p[j].x-p[i].x) * (y-p[i].y) / (p[j].y-p[i].y) + p[i].x) inside = !inside;
+  }
+  return inside;
+}
+function insideAny(x, y) { for (const s of shapes) if (insideShape(s, x, y)) return true; return false; }
+function shapeCenter(s) {
+  if (s.type === 'rect') return [s.x + s.w/2, s.y + s.h/2];
+  if (s.type === 'circle') return [s.cx, s.cy];
+  let cx = 0, cy = 0; for (const p of s.pts) { cx += p.x; cy += p.y; }
+  return [cx/s.pts.length, cy/s.pts.length];
+}
+function shapeBBox(s) {
+  if (s.type === 'rect') return [s.w, s.h];
+  if (s.type === 'circle') return [2*s.r, 2*s.r];
+  let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
+  for (const p of s.pts) { minx = Math.min(minx,p.x); maxx = Math.max(maxx,p.x); miny = Math.min(miny,p.y); maxy = Math.max(maxy,p.y); }
+  return [maxx-minx, maxy-miny];
+}
+function shapeSize(s) { const [w,h] = shapeBBox(s); return Math.max(w,h); }
+function moveShape(s, dx, dy) {
+  if (s.type === 'rect') { s.x += dx; s.y += dy; }
+  else if (s.type === 'circle') { s.cx += dx; s.cy += dy; }
+  else for (const p of s.pts) { p.x += dx; p.y += dy; }
+}
+function scaleShape(s, k) {
+  if (s.type === 'rect') { const cx = s.x+s.w/2, cy = s.y+s.h/2; s.w = Math.max(12, s.w*k); s.h = Math.max(12, s.h*k); s.x = cx-s.w/2; s.y = cy-s.h/2; }
+  else if (s.type === 'circle') s.r = Math.max(7, s.r*k);
+  else { const [cx, cy] = shapeCenter(s); for (const p of s.pts) { p.x = cx + (p.x-cx)*k; p.y = cy + (p.y-cy)*k; } }
+}
+function addShape(type, x, y) {
+  x = Math.max(30, Math.min(W-30, x)); y = Math.max(30, Math.min(H-30, y));
+  if (type === 'rect')   shapes.push({type:'rect', x:x-2.5*PPF, y:y-1.5*PPF, w:5*PPF, h:3*PPF});   // 5 x 3 ft
+  if (type === 'circle') shapes.push({type:'circle', cx:x, cy:y, r:1.5*PPF});                      // 3 ft dia
+  if (type === 'tri')    shapes.push({type:'poly', pts:[{x:x, y:y-1.6*PPF},{x:x+1.5*PPF, y:y+1.1*PPF},{x:x-1.5*PPF, y:y+1.1*PPF}]});
+  barrierDirty = true;
+}
+
+/* ================= Adaptive mesh (quadtree, zoom-refined) ================= */
+function cellMixed(x, y, w, h) {
+  let ins = 0, tot = 0;
+  for (let i = 0; i <= 2; i++) for (let j = 0; j <= 2; j++) {
+    tot++; if (insideAny(x + w*i/2, y + h*j/2)) ins++;
+  }
+  return ins > 0 && ins < tot;
+}
+function buildMesh() {
+  meshRects = [];
+  const minSize = Math.max(3, 24/zoom);        // finer mesh at higher zoom
+  const rec = (x, y, w, h, depth) => {
+    const mixed = cellMixed(x, y, w, h);
+    if ((depth < 3) || (mixed && w > minSize && depth < 11)) {
+      const hw = w/2, hh = h/2;
+      rec(x, y, hw, hh, depth+1);      rec(x+hw, y, hw, hh, depth+1);
+      rec(x, y+hh, hw, hh, depth+1);   rec(x+hw, y+hh, hw, hh, depth+1);
+    } else meshRects.push({x, y, w, h});
+  };
+  rec(0, 0, W, H, 0);
+  meshZoom = zoom;
+  document.getElementById('meshVal').textContent = meshRects.length.toLocaleString();
+}
+
+/* ================= Barrier rasterization ================= */
+function rasterize() {
+  barrier.fill(0);
+  for (let y = 1; y < NY-1; y++)
+    for (let x = 1; x < NX-1; x++)
+      if (insideAny((x+0.5)*SCALE, (y+0.5)*SCALE)) barrier[y*NX+x] = 1;
+  barrierDirty = false;
+}
+
+/* ================= LBM solver ================= */
+function setEq(arr, i, rho, ux, uy) {
+  const usq = 1.5*(ux*ux + uy*uy);
+  for (let k = 0; k < Q; k++) {
+    const eu = 3*(ex[k]*ux + ey[k]*uy);
+    arr[k][i] = wt[k] * rho * (1 + eu + 0.5*eu*eu - usq);
+  }
+}
+function initFluid() {
+  const [u0x, u0y] = windVec();
+  for (let i = 0; i < N; i++) { setEq(f, i, 1, u0x, u0y); UX[i] = u0x; UY[i] = u0y; SPD[i] = Math.hypot(u0x,u0y); }
+  stepCount = 0; probeHist.length = 0;
+}
+function lbmStep() {
+  const [u0x, u0y] = windVec();
+  for (let y = 1; y < NY-1; y++) {
+    const row = y*NX;
+    for (let x = 1; x < NX-1; x++) {
+      const i = row + x;
+      if (barrier[i]) continue;
+      for (let k = 0; k < Q; k++) {
+        const si = (y-ey[k])*NX + (x-ex[k]);
+        g[k][i] = barrier[si] ? f[OPP[k]][i] : f[k][si];
+      }
+    }
+  }
+  for (let y = 1; y < NY-1; y++) {
+    const row = y*NX;
+    for (let x = 1; x < NX-1; x++) {
+      const i = row + x;
+      if (barrier[i]) { UX[i] = 0; UY[i] = 0; SPD[i] = 0; continue; }
+      let rho = 0, mx = 0, my = 0;
+      for (let k = 0; k < Q; k++) { const v = g[k][i]; rho += v; mx += ex[k]*v; my += ey[k]*v; }
+      if (rho <= 0 || !isFinite(rho)) { setEq(g, i, 1, u0x, u0y); rho = 1; mx = u0x; my = u0y; }
+      let ux = mx/rho, uy = my/rho;
+      const sp = Math.hypot(ux, uy);
+      if (sp > 0.28) { ux *= 0.28/sp; uy *= 0.28/sp; }
+      UX[i] = ux; UY[i] = uy; SPD[i] = Math.min(sp, 0.28);
+      const usq = 1.5*(ux*ux + uy*uy);
+      let pxx = 0, pyy = 0, pxy = 0;
+      for (let k = 0; k < Q; k++) {
+        const eu = 3*(ex[k]*ux + ey[k]*uy);
+        const e = wt[k]*rho*(1 + eu + 0.5*eu*eu - usq);
+        FEQ[k] = e;
+        const fn = g[k][i] - e;
+        pxx += fn*ex[k]*ex[k]; pyy += fn*ey[k]*ey[k]; pxy += fn*ex[k]*ey[k];
+      }
+      const Qn = Math.sqrt(pxx*pxx + pyy*pyy + 2*pxy*pxy);
+      const tau = TAU0 + 0.5*(Math.sqrt(TAU0*TAU0 + 18*CSMAG*Qn/rho) - TAU0);
+      const om = 1/tau;
+      for (let k = 0; k < Q; k++) g[k][i] += om*(FEQ[k] - g[k][i]);
+    }
+  }
+  for (let x = 0; x < NX; x++) {
+    setEq(g, x, 1, u0x, u0y);                 UX[x] = u0x; UY[x] = u0y; SPD[x] = Math.hypot(u0x,u0y);
+    const b = (NY-1)*NX + x; setEq(g, b, 1, u0x, u0y); UX[b] = u0x; UY[b] = u0y; SPD[b] = SPD[x];
+  }
+  for (let y = 0; y < NY; y++) {
+    const l = y*NX, r = y*NX + NX-1;
+    setEq(g, l, 1, u0x, u0y); UX[l] = u0x; UY[l] = u0y; SPD[l] = Math.hypot(u0x,u0y);
+    setEq(g, r, 1, u0x, u0y); UX[r] = u0x; UY[r] = u0y; SPD[r] = SPD[l];
+  }
+  const t = f; f = g; g = t;
+  stepCount++;
+}
+
+/* ================= Turbulence detection ================= */
+const probeHist = [];
+const HIST = 120;
+function probeTurbulence() {
+  if (!shapes.length || stepCount < 300) return 0;
+  const [ux0, uy0] = windVec();
+  const u0 = Math.hypot(ux0, uy0), nx = ux0/u0, ny = uy0/u0;
+  let val = 0, cnt = 0;
+  for (const s of shapes) {
+    const [cx, cy] = shapeCenter(s), sz = shapeSize(s);
+    const px = Math.round((cx + nx*sz*1.1)/SCALE), py = Math.round((cy + ny*sz*1.1)/SCALE);
+    if (px < 1 || px >= NX-1 || py < 1 || py >= NY-1) continue;
+    const i = py*NX + px;
+    if (barrier[i]) continue;
+    val += -UX[i]*ny + UY[i]*nx;
+    cnt++;
+  }
+  if (!cnt) return 0;
+  probeHist.push(val/cnt);
+  if (probeHist.length > HIST) probeHist.shift();
+  if (probeHist.length < HIST/2) return 0;
+  let m = 0; for (const v of probeHist) m += v; m /= probeHist.length;
+  let s2 = 0; for (const v of probeHist) s2 += (v-m)*(v-m);
+  return Math.sqrt(s2/probeHist.length) / u0;
+}
+
+/* ================= Rotor (recirculation) zone ================= */
+function computeRotor() {
+  const [ux0, uy0] = windVec();
+  const u0 = Math.hypot(ux0, uy0), nx = ux0/u0, ny = uy0/u0;
+  const thr = -0.03*u0;
+  let cnt = 0;
+  const d = rotImg.data;
+  const on = document.getElementById('showRotor').checked;
+  for (let i = 0; i < N; i++) {
+    const o = i*4;
+    let hit = 0;
+    if (!barrier[i] && (UX[i]*nx + UY[i]*ny) < thr) { hit = 1; cnt++; }
+    if (on) { d[o] = 255; d[o+1] = 80; d[o+2] = 210; d[o+3] = hit ? 130 : 0; }
+  }
+  rotorAreaFt2 = cnt * CELL_AREA_FT2;
+  document.getElementById('rotorVal').textContent = rotorAreaFt2 >= 0.05 ? rotorAreaFt2.toFixed(1) + ' ft²' : '0 ft²';
+  if (on) rotCtx.putImageData(rotImg, 0, 0);
+  return on;
+}
+
+/* ================= Velocity sampling & streamlines ================= */
+function sampleVel(px, py, out) {
+  let gx = px/SCALE - 0.5, gy = py/SCALE - 0.5;
+  gx = Math.max(0, Math.min(NX-1.001, gx)); gy = Math.max(0, Math.min(NY-1.001, gy));
+  const x0 = gx|0, y0 = gy|0, fx = gx-x0, fy = gy-y0;
+  const i00 = y0*NX+x0, i10 = i00+1, i01 = i00+NX, i11 = i01+1;
+  out[0] = UX[i00]*(1-fx)*(1-fy) + UX[i10]*fx*(1-fy) + UX[i01]*(1-fx)*fy + UX[i11]*fx*fy;
+  out[1] = UY[i00]*(1-fx)*(1-fy) + UY[i10]*fx*(1-fy) + UY[i01]*(1-fx)*fy + UY[i11]*fx*fy;
+}
+function inBarrierPx(px, py) {
+  const x = (px/SCALE)|0, y = (py/SCALE)|0;
+  if (x < 0 || x >= NX || y < 0 || y >= NY) return true;
+  return !!barrier[y*NX+x];
+}
+function drawStreamlines() {
+  const [ux0, uy0] = windVec();
+  const u0 = Math.hypot(ux0, uy0);
+  const umax = 1.6*u0;
+  const buckets = new Array(NLUT);
+  const seeds = [];
+  const gap = Math.max(8, 26/zoom);            // denser lines when zoomed in
+  if (ux0 >  0.15*u0) for (let y = gap/2; y < H; y += gap) seeds.push([3, y]);
+  if (ux0 < -0.15*u0) for (let y = gap/2; y < H; y += gap) seeds.push([W-3, y]);
+  if (uy0 >  0.15*u0) for (let x = gap/2; x < W; x += gap) seeds.push([x, 3]);
+  if (uy0 < -0.15*u0) for (let x = gap/2; x < W; x += gap) seeds.push([x, H-3]);
+  const v = [0,0];
+  const hstep = 4;
+  for (const [sx, sy] of seeds) {
+    let px = sx, py = sy;
+    for (let n = 0; n < 400; n++) {
+      sampleVel(px, py, v);
+      const sp = Math.hypot(v[0], v[1]);
+      if (sp < 1e-5) break;
+      const mx = px + 0.5*hstep*v[0]/sp, my = py + 0.5*hstep*v[1]/sp;
+      sampleVel(mx, my, v);
+      const sp2 = Math.hypot(v[0], v[1]);
+      if (sp2 < 1e-5) break;
+      const nx2 = px + hstep*v[0]/sp2, ny2 = py + hstep*v[1]/sp2;
+      if (nx2 < 0 || nx2 > W || ny2 < 0 || ny2 > H || inBarrierPx(nx2, ny2)) break;
+      const bi = lutIdx(sp2/umax);
+      if (!buckets[bi]) buckets[bi] = new Path2D();
+      buckets[bi].moveTo(px, py); buckets[bi].lineTo(nx2, ny2);
+      px = nx2; py = ny2;
+    }
+  }
+  ctx.lineWidth = 1.5/zoom; ctx.lineCap = 'round';
+  for (let b = 0; b < NLUT; b++) if (buckets[b]) { ctx.strokeStyle = LUTCSS[b]; ctx.stroke(buckets[b]); }
+}
+function drawArrows() {
+  const [ux0, uy0] = windVec();
+  const umax = 1.6*Math.hypot(ux0, uy0);
+  const v = [0,0];
+  const gap = Math.max(7, 24/zoom);
+  /* visible base-px region only */
+  const bx0 = Math.max(0, -panX/zoom), bx1 = Math.min(W, (W-panX)/zoom);
+  const by0 = Math.max(0, -panY/zoom), by1 = Math.min(H, (H-panY)/zoom);
+  ctx.lineWidth = 1.6/zoom; ctx.lineCap = 'round';
+  const hl = 5/Math.sqrt(zoom), hw = 3/Math.sqrt(zoom);
+  for (let y = by0 + gap/2; y < by1; y += gap) {
+    for (let x = bx0 + gap/2; x < bx1; x += gap) {
+      if (inBarrierPx(x, y)) continue;
+      sampleVel(x, y, v);
+      const sp = Math.hypot(v[0], v[1]);
+      if (sp < 1e-5) continue;
+      const t = Math.min(1, sp/umax);
+      const len = (4 + t*16)/Math.sqrt(zoom);
+      const dx = v[0]/sp, dy = v[1]/sp;
+      const x2 = x + dx*len, y2 = y + dy*len;
+      ctx.strokeStyle = LUTCSS[lutIdx(t)];
+      ctx.beginPath();
+      ctx.moveTo(x, y); ctx.lineTo(x2, y2);
+      ctx.moveTo(x2, y2); ctx.lineTo(x2 - dx*hl - dy*hw, y2 - dy*hl + dx*hw);
+      ctx.moveTo(x2, y2); ctx.lineTo(x2 - dx*hl + dy*hw, y2 - dy*hl - dx*hw);
+      ctx.stroke();
+    }
+  }
+}
+
+/* ================= Heatmap & rotor overlay canvases ================= */
+const heatCv = document.createElement('canvas');
+heatCv.width = NX; heatCv.height = NY;
+const heatCtx = heatCv.getContext('2d');
+const heatImg = heatCtx.createImageData(NX, NY);
+const rotCv = document.createElement('canvas');
+rotCv.width = NX; rotCv.height = NY;
+const rotCtx = rotCv.getContext('2d');
+const rotImg = rotCtx.createImageData(NX, NY);
+function drawHeatmap() {
+  const [ux0, uy0] = windVec();
+  const umax = 1.6*Math.hypot(ux0, uy0);
+  const d = heatImg.data;
+  for (let i = 0; i < N; i++) {
+    const o = i*4;
+    if (barrier[i]) { d[o]=26; d[o+1]=30; d[o+2]=40; d[o+3]=255; continue; }
+    const c = LUT[lutIdx(SPD[i]/umax)];
+    d[o] = c[0]; d[o+1] = c[1]; d[o+2] = c[2]; d[o+3] = 80;
+  }
+  heatCtx.putImageData(heatImg, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(heatCv, 0, 0, W, H);
+}
+
+/* ================= Rulers (feet) ================= */
+const RT = 20, RL = 34;                        // ruler strip sizes (screen px)
+function fmtFt(v) { return (Math.abs(v % 1) < 1e-9) ? String(Math.round(v)) : v.toFixed(1); }
+function drawRulers() {
+  ctx.fillStyle = 'rgba(13,16,22,0.88)';
+  ctx.fillRect(0, 0, W, RT);
+  ctx.fillRect(0, 0, RL, H);
+  ctx.strokeStyle = '#2a3242';
+  ctx.beginPath(); ctx.moveTo(0, RT+0.5); ctx.lineTo(W, RT+0.5); ctx.moveTo(RL+0.5, RT); ctx.lineTo(RL+0.5, H); ctx.stroke();
+  const ppf = PPF*zoom;
+  let step = 10;
+  for (const s of [0.25, 0.5, 1, 2, 5, 10]) if (s*ppf >= 44) { step = s; break; }
+  const minor = step/5;
+  ctx.fillStyle = '#8b96a8'; ctx.font = '9px sans-serif'; ctx.strokeStyle = '#5d6a80';
+  /* X axis */
+  ctx.textAlign = 'left';
+  let ft0 = Math.floor(((RL - panX)/zoom)/PPF / minor) * minor;
+  ctx.beginPath();
+  for (let ftv = ft0; ftv <= 40.0001; ftv += minor) {
+    if (ftv < -1e-9) continue;
+    const sx = ftv*PPF*zoom + panX;
+    if (sx < RL) continue; if (sx > W) break;
+    const major = Math.abs(ftv/step - Math.round(ftv/step)) < 1e-6;
+    ctx.moveTo(sx, RT); ctx.lineTo(sx, RT - (major ? 7 : 3.5));
+    if (major) ctx.fillText(fmtFt(ftv), sx+3, 9);
+  }
+  ctx.stroke();
+  /* Y axis */
+  let fy0 = Math.floor(((RT - panY)/zoom)/PPF / minor) * minor;
+  ctx.beginPath();
+  for (let ftv = fy0; ftv <= 24.0001; ftv += minor) {
+    if (ftv < -1e-9) continue;
+    const sy = ftv*PPF*zoom + panY;
+    if (sy < RT) continue; if (sy > H) break;
+    const major = Math.abs(ftv/step - Math.round(ftv/step)) < 1e-6;
+    ctx.moveTo(RL, sy); ctx.lineTo(RL - (major ? 7 : 3.5), sy);
+    if (major) ctx.fillText(fmtFt(ftv), 3, sy - 3);
+  }
+  ctx.stroke();
+  /* corner + unit */
+  ctx.fillStyle = 'rgba(13,16,22,1)'; ctx.fillRect(0, 0, RL, RT);
+  ctx.fillStyle = '#8b96a8'; ctx.fillText('ft', 12, 13);
+  /* cursor position readout */
+  if (mousePos) {
+    const t = `x ${(mousePos[0]/PPF).toFixed(1)} ft   y ${(mousePos[1]/PPF).toFixed(1)} ft`;
+    ctx.font = '11px sans-serif';
+    const tw = ctx.measureText(t).width;
+    ctx.fillStyle = 'rgba(13,16,22,0.8)';
+    ctx.fillRect(RL+8, H-24, tw+14, 18);
+    ctx.fillStyle = '#8b96a8';
+    ctx.fillText(t, RL+15, H-11);
+  }
+}
+
+/* ================= Rendering ================= */
+function drawShapes() {
+  for (const s of shapes) {
+    ctx.beginPath();
+    if (s.type === 'rect') ctx.rect(s.x, s.y, s.w, s.h);
+    else if (s.type === 'circle') ctx.arc(s.cx, s.cy, s.r, 0, 7);
+    else { ctx.moveTo(s.pts[0].x, s.pts[0].y); for (let i = 1; i < s.pts.length; i++) ctx.lineTo(s.pts[i].x, s.pts[i].y); ctx.closePath(); }
+    ctx.fillStyle = '#242b39';
+    ctx.fill();
+    ctx.strokeStyle = s === selected ? '#4da3ff' : '#5d6a80';
+    ctx.lineWidth = (s === selected ? 2.5 : 1.5)/zoom;
+    ctx.stroke();
+    /* dimension label on selected shape */
+    if (s === selected) {
+      const [bw, bh] = shapeBBox(s);
+      const [cx, cy] = shapeCenter(s);
+      const lab = s.type === 'circle' ? `⌀ ${(bw/PPF).toFixed(1)} ft` : `${(bw/PPF).toFixed(1)} × ${(bh/PPF).toFixed(1)} ft`;
+      ctx.font = `${11/zoom}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#9fc6ff';
+      ctx.fillText(lab, cx, cy - bh/2 - 6/zoom);
+      ctx.textAlign = 'left';
+    }
+  }
+}
+function drawMeshOverlay() {
+  ctx.strokeStyle = 'rgba(160,190,230,0.22)';
+  ctx.lineWidth = 0.75/zoom;
+  ctx.beginPath();
+  for (const r of meshRects) ctx.rect(r.x, r.y, r.w, r.h);
+  ctx.stroke();
+}
+function drawDrawPath() {
+  if (drawPts.length < 2) return;
+  ctx.strokeStyle = '#ff9d4d'; ctx.lineWidth = 2/zoom; ctx.setLineDash([6/zoom, 4/zoom]);
+  ctx.beginPath();
+  ctx.moveTo(drawPts[0].x, drawPts[0].y);
+  for (let i = 1; i < drawPts.length; i++) ctx.lineTo(drawPts[i].x, drawPts[i].y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+let turbLevel = 0, fpsAcc = 0, fpsN = 0, lastT = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (barrierDirty) { rasterize(); buildMesh(); }
+  else if (Math.abs(meshZoom - zoom) > 0.01) buildMesh();     // refine mesh on zoom change
+  if (running) {
+    for (let s = 0; s < STEPS_PER_FRAME; s++) lbmStep();
+    const tl = probeTurbulence();
+    turbLevel = turbLevel*0.9 + tl*0.1;
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.setTransform(zoom, 0, 0, zoom, panX, panY);
+  if (running || stepCount > 0) {
+    if (document.getElementById('showHeat').checked) drawHeatmap();
+    if (running || stepCount > 0) {
+      const rotorOn = computeRotor();
+      if (rotorOn) { ctx.imageSmoothingEnabled = true; ctx.drawImage(rotCv, 0, 0, W, H); }
+    }
+    const turbulent = turbLevel > 0.045;
+    const view = document.getElementById('flowView').value;
+    const useArrows = view === 'arrows' || (view === 'auto' && turbulent);
+    if (useArrows) drawArrows(); else drawStreamlines();
+    const badge = document.getElementById('regime');
+    if (running) {
+      badge.textContent = turbulent ? 'turbulent' : 'laminar';
+      badge.className = 'badge ' + (turbulent ? 'turb' : 'lam');
+    }
+  }
+  if (document.getElementById('showMesh').checked || now < meshFlashUntil) drawMeshOverlay();
+  drawShapes();
+  drawDrawPath();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  drawRulers();
+  const dt = now - lastT; lastT = now;
+  fpsAcc += dt; fpsN++;
+  if (fpsAcc > 500) {
+    document.getElementById('fpsVal').textContent = running ? Math.round(1000/(fpsAcc/fpsN)) : '–';
+    fpsAcc = 0; fpsN = 0;
+  }
+  if (running && (stepCount % 240) === 0 && !isFinite(f[0][(NY>>1)*NX + (NX>>1)])) initFluid();
+}
+
+/* ================= Status ================= */
+function updateStatus() {
+  const mph = windMph();
+  let L = 0; for (const s of shapes) L = Math.max(L, shapeSize(s)/PPF);   // ft
+  const re = L ? Math.round(mph*MPH2FTS*L/NU_AIR) : 0;
+  document.getElementById('reVal').textContent = re ? re.toLocaleString() : '–';
+  document.getElementById('legMax').textContent = Math.round(1.6*mph) + ' MPH';
+  const sv = document.getElementById('selVal');
+  if (selected) {
+    const [bw, bh] = shapeBBox(selected);
+    sv.textContent = selected.type === 'circle' ? `⌀ ${(bw/PPF).toFixed(1)} ft` : `${(bw/PPF).toFixed(1)} × ${(bh/PPF).toFixed(1)} ft`;
+  } else sv.textContent = '–';
+}
+
+/* ================= Zoom / pan ================= */
+function clampPan() {
+  panX = Math.min(0, Math.max(W - W*zoom, panX));
+  panY = Math.min(0, Math.max(H - H*zoom, panY));
+}
+function setZoom(nz, sx, sy) {
+  nz = Math.max(1, Math.min(8, nz));
+  const bx = (sx - panX)/zoom, by = (sy - panY)/zoom;
+  zoom = nz;
+  panX = sx - bx*zoom; panY = sy - by*zoom;
+  clampPan();
+  document.getElementById('zoomVal').textContent = zoom.toFixed(1) + '×';
+}
+
+/* ================= UI wiring ================= */
+const dir = document.getElementById('dir'), spd = document.getElementById('spd');
+const toastEl = document.getElementById('toast');
+let toastTimer = null;
+function toast(msg, ms = 2600) {
+  toastEl.textContent = msg; toastEl.style.opacity = 1;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.style.opacity = 0, ms);
+}
+dir.addEventListener('input', () => {
+  document.getElementById('dirVal').textContent = dir.value + '°';
+  document.getElementById('arrow').style.transform = `rotate(${dir.value}deg)`;
+  probeHist.length = 0;
+});
+spd.addEventListener('input', () => {
+  document.getElementById('spdVal').textContent = spd.value + ' MPH';
+  updateStatus(); probeHist.length = 0;
+});
+
+document.getElementById('simBtn').addEventListener('click', () => {
+  running = !running;
+  const b = document.getElementById('simBtn');
+  if (running) {
+    rasterize(); buildMesh();
+    meshFlashUntil = performance.now() + 1500;
+    if (stepCount === 0) initFluid();
+    b.innerHTML = '&#10074;&#10074; Pause';
+    toast('Adaptive mesh generated → running CFD…');
+  } else {
+    b.innerHTML = '&#9654; Simulate';
+    document.getElementById('regime').textContent = 'paused';
+    document.getElementById('regime').className = 'badge off';
+  }
+  updateStatus();
+});
+document.getElementById('resetBtn').addEventListener('click', () => { initFluid(); turbLevel = 0; toast('Flow field reset'); });
+document.getElementById('clearBtn').addEventListener('click', () => {
+  shapes = []; selected = null; barrierDirty = true; probeHist.length = 0; updateStatus();
+});
+document.getElementById('drawBtn').addEventListener('click', () => {
+  mode = mode === 'draw' ? 'select' : 'draw';
+  document.getElementById('drawBtn').classList.toggle('active', mode === 'draw');
+  cv.classList.toggle('draw', mode === 'draw');
+  if (mode === 'draw') toast('Draw a shape on the canvas. End near your start point to close it.');
+});
+document.getElementById('zin').addEventListener('click', () => setZoom(zoom*1.4, W/2, H/2));
+document.getElementById('zout').addEventListener('click', () => setZoom(zoom/1.4, W/2, H/2));
+document.getElementById('zreset').addEventListener('click', () => { zoom = 1; panX = 0; panY = 0; document.getElementById('zoomVal').textContent = '1.0×'; });
+
+/* legend */
+(() => {
+  const lc = document.getElementById('legend'), lctx = lc.getContext('2d');
+  for (let x = 0; x < lc.width; x++) {
+    lctx.fillStyle = LUTCSS[lutIdx(x/(lc.width-1))];
+    lctx.fillRect(x, 0, 1, lc.height);
+  }
+})();
+
+/* screen <-> base px */
+function screenPos(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * (W/r.width), y: (e.clientY - r.top) * (H/r.height) };
+}
+function basePos(e) {
+  const s = screenPos(e);
+  return { x: (s.x - panX)/zoom, y: (s.y - panY)/zoom };
+}
+
+/* palette drag & drop */
+const ghost = document.getElementById('ghost');
+let dragType = null, dragMoved = false;
+for (const pal of document.querySelectorAll('.pal')) {
+  pal.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    dragType = pal.dataset.shape;
+    ghost.innerHTML = pal.innerHTML;
+    ghost.style.display = 'block';
+    ghost.style.left = (e.clientX-15) + 'px'; ghost.style.top = (e.clientY-15) + 'px';
+  });
+  pal.addEventListener('click', () => { if (!dragMoved) { addShape(pal.dataset.shape, W/2, H/2); updateStatus(); } });
+}
+window.addEventListener('pointermove', e => {
+  if (dragType) {
+    dragMoved = true;
+    ghost.style.left = (e.clientX-15) + 'px'; ghost.style.top = (e.clientY-15) + 'px';
+  }
+});
+window.addEventListener('pointerup', e => {
+  if (dragType) {
+    const r = cv.getBoundingClientRect();
+    if (dragMoved && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+      const p = basePos(e);
+      addShape(dragType, p.x, p.y);
+      updateStatus();
+    }
+    dragType = null; ghost.style.display = 'none';
+    setTimeout(() => dragMoved = false, 0);
+  }
+});
+
+/* canvas interaction: draw / select / move / pan */
+let dragShapeRef = null, lastPt = null, panning = false, panStart = null;
+cv.addEventListener('pointerdown', e => {
+  const p = basePos(e);
+  cv.setPointerCapture(e.pointerId);
+  if (mode === 'draw') { drawing = true; drawPts = [p]; return; }
+  selected = null;
+  for (let i = shapes.length-1; i >= 0; i--) {
+    if (insideShape(shapes[i], p.x, p.y)) { selected = shapes[i]; break; }
+  }
+  if (selected) { dragShapeRef = selected; lastPt = p; }
+  else {
+    const s = screenPos(e);
+    panning = true; panStart = { sx: s.x, sy: s.y, px: panX, py: panY };
+    cv.classList.add('panning');
+  }
+  updateStatus();
+});
+cv.addEventListener('pointermove', e => {
+  const p = basePos(e);
+  mousePos = [p.x, p.y];
+  if (drawing) {
+    const lp = drawPts[drawPts.length-1];
+    if (Math.hypot(p.x-lp.x, p.y-lp.y) > 3/zoom) drawPts.push(p);
+  } else if (dragShapeRef && lastPt) {
+    moveShape(dragShapeRef, p.x-lastPt.x, p.y-lastPt.y);
+    lastPt = p; barrierDirty = true; probeHist.length = 0;
+  } else if (panning) {
+    const s = screenPos(e);
+    panX = panStart.px + (s.x - panStart.sx);
+    panY = panStart.py + (s.y - panStart.sy);
+    clampPan();
+  }
+});
+cv.addEventListener('pointerleave', () => { mousePos = null; });
+cv.addEventListener('pointerup', e => {
+  if (drawing) { drawing = false; finishDrawing(); return; }
+  dragShapeRef = null; lastPt = null;
+  panning = false; cv.classList.remove('panning');
+});
+cv.addEventListener('dblclick', e => {
+  const p = basePos(e);
+  for (let i = shapes.length-1; i >= 0; i--) {
+    if (insideShape(shapes[i], p.x, p.y)) {
+      shapes.splice(i, 1); selected = null; barrierDirty = true; updateStatus();
+      return;
+    }
+  }
+});
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  const p = basePos(e);
+  if (e.shiftKey) {
+    for (let i = shapes.length-1; i >= 0; i--) {
+      if (insideShape(shapes[i], p.x, p.y)) {
+        scaleShape(shapes[i], (e.deltaY < 0 || e.deltaX < 0) ? 1.08 : 1/1.08);
+        selected = shapes[i];
+        barrierDirty = true; updateStatus();
+        return;
+      }
+    }
+    return;
+  }
+  const s = screenPos(e);
+  setZoom(zoom * (e.deltaY < 0 ? 1.12 : 1/1.12), s.x, s.y);
+}, {passive:false});
+window.addEventListener('keydown', e => {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+    shapes = shapes.filter(s => s !== selected); selected = null; barrierDirty = true; updateStatus();
+  }
+  if (e.key === 'Escape') { selected = null; if (mode === 'draw') document.getElementById('drawBtn').click(); updateStatus(); }
+});
+
+/* closed-shape check for free drawing */
+function polyArea(pts) {
+  let a = 0;
+  for (let i = 0, j = pts.length-1; i < pts.length; j = i++) a += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
+  return Math.abs(a/2);
+}
+function finishDrawing() {
+  const pts = drawPts; drawPts = [];
+  if (pts.length < 3) { toast('⚠ Not enough points — shape discarded.'); return; }
+  const d = Math.hypot(pts[0].x - pts[pts.length-1].x, pts[0].y - pts[pts.length-1].y);
+  const closeThr = 30/zoom;
+  if (d > closeThr) {
+    toast(`⚠ Shape is NOT closed (gap ≈ ${(d/PPF).toFixed(1)} ft). End near your start point.`, 3500);
+    return;
+  }
+  if (polyArea(pts) < 200) { toast('⚠ Shape too small — discarded.'); return; }
+  shapes.push({type:'poly', pts});
+  barrierDirty = true; updateStatus();
+  toast('✓ Closed shape detected — object added.');
+}
+
+/* ================= Boot ================= */
+addShape('rect', W*0.32, H*0.5);     // 5 ft x 3 ft rectangle, the demo case
+rasterize(); buildMesh();
+updateStatus();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
