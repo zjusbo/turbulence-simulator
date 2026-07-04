@@ -12,10 +12,9 @@
   *{box-sizing:border-box; margin:0; padding:0;}
   body{background:var(--bg); color:var(--text); font:14px/1.45 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; height:100vh; height:100dvh; overflow:hidden; overscroll-behavior:none;}
   #app{display:flex; height:100vh; height:100dvh;}
-  aside{width:272px; min-width:272px; background:var(--panel); border-right:1px solid var(--border); padding:14px; padding-top:52px; overflow-y:auto; transition:margin-left .25s ease, transform .25s ease; z-index:45;}
+  aside{width:272px; min-width:272px; background:var(--panel); border-right:1px solid var(--border); padding:14px; padding-top:52px; overflow-y:auto; transition:margin-left .25s ease, flex-basis .25s ease, padding .2s ease; z-index:45;}
   body.nav-collapsed aside{margin-left:-272px;}
   #menuBtn{position:fixed; top:10px; left:10px; z-index:50; width:38px; height:38px; padding:0; font-size:17px; background:#161b24ee;}
-  #backdrop{position:fixed; inset:0; background:#0009; z-index:44; display:none;}
   button, select, input{touch-action:manipulation;}
   h1{font-size:16px; margin-bottom:2px;}
   .sub{color:var(--muted); font-size:11px; margin-bottom:12px;}
@@ -49,7 +48,7 @@
   .badge.lam{background:#12324a; color:#5fc3ff;}
   .badge.turb{background:#4a2312; color:#ffab5f;}
   .badge.off{background:#242a36; color:var(--muted);}
-  main{flex:1; display:flex; align-items:center; justify-content:center; padding:12px; position:relative; min-width:0;}
+  main{flex:1; display:flex; align-items:center; justify-content:center; padding:12px; position:relative; min-width:0; min-height:0;}
   #wrap{position:relative; width:100%; max-width:min(100%, calc((100vh - 24px) * 960 / 576));}
   #cv{width:100%; height:auto; aspect-ratio:960/576; background:#0a0d12; border:1px solid var(--border); border-radius:12px; touch-action:none; display:block;}
   #cv.draw{cursor:crosshair;}
@@ -58,11 +57,21 @@
   #zoomCtl button{width:32px; height:32px; padding:0; font-size:16px; background:#161b24dd;}
   #shapeBar{position:absolute; top:26px; left:50%; transform:translateX(-50%); display:none; gap:6px; z-index:5;}
   #shapeBar button{width:40px; height:36px; padding:0; font-size:16px; background:#161b24dd;}
+  #toast{position:absolute; bottom:28px; left:50%; transform:translateX(-50%); background:#1d2431ee; border:1px solid var(--border); border-radius:8px; padding:8px 16px; font-size:13px; opacity:0; transition:opacity .25s; pointer-events:none; max-width:80%; z-index:60;}
+  #ghost{position:fixed; pointer-events:none; z-index:99; opacity:.7; display:none;}
+  details{font-size:12px; color:var(--muted);}
+  details summary{cursor:pointer; font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px;}
+  details li{margin:4px 0 4px 16px;}
+  /* ---- Mobile: toolbox becomes a bottom sheet (1/3), canvas fills top 2/3 ---- */
   @media (max-width:768px){
-    aside{position:fixed; top:0; left:0; bottom:0; box-shadow:4px 0 24px #000a; margin-left:0;}
-    body.nav-collapsed aside{margin-left:0; transform:translateX(-105%);}
-    body:not(.nav-collapsed) #backdrop{display:block;}
-    main{padding:6px; padding-top:54px; align-items:flex-start;}
+    #app{flex-direction:column;}
+    main{order:1; flex:1 1 auto; padding:6px; align-items:stretch; justify-content:stretch;}
+    #wrap{max-width:none; height:100%;}
+    #cv{width:100%; height:100%; aspect-ratio:auto;}
+    aside{order:2; position:static; width:100%; min-width:0; flex:0 0 33.4dvh; height:auto;
+          border-right:none; border-top:1px solid var(--border); margin:0;
+          padding:12px; box-shadow:0 -6px 20px #0007;}
+    body.nav-collapsed aside{margin-left:0; flex-basis:0; padding-top:0; padding-bottom:0; overflow:hidden; border-top:none;}
     .hint{display:none;}
   }
   @media (pointer:coarse){
@@ -71,16 +80,10 @@
     #zoomCtl button{width:40px; height:40px;}
     input[type=range]{height:28px;}
   }
-  #toast{position:absolute; bottom:28px; left:50%; transform:translateX(-50%); background:#1d2431ee; border:1px solid var(--border); border-radius:8px; padding:8px 16px; font-size:13px; opacity:0; transition:opacity .25s; pointer-events:none; max-width:80%;}
-  #ghost{position:fixed; pointer-events:none; z-index:99; opacity:.7; display:none;}
-  details{font-size:12px; color:var(--muted);}
-  details summary{cursor:pointer; font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px;}
-  details li{margin:4px 0 4px 16px;}
 </style>
 </head>
 <body>
 <button id="menuBtn" title="Toggle panel">&#9776;</button>
-<div id="backdrop"></div>
 <div id="app">
   <aside>
     <h1>Wind Tunnel 2D</h1>
@@ -103,7 +106,7 @@
         <button id="drawBtn" title="Free-draw a closed shape">&#9998; Draw</button>
         <button id="clearBtn" title="Remove all objects">Clear</button>
       </div>
-      <div class="hint">Drag a shape onto the canvas (or click to place). Tap/click a shape to select it, then use the +/&minus;/&#128465; toolbar (or Shift+scroll, double-click). Scroll or pinch = zoom &middot; drag background = pan. Drawn shapes must be closed.</div>
+      <div class="hint">Drag a shape onto the canvas (or click to place). Click a shape to select it: use the corner handle to scale, the top handle to rotate, the +/&minus;/&#128465; toolbar, or double-click to delete. Scroll or pinch = zoom &middot; drag background = pan. Drawn shapes must be closed.</div>
     </section>
 
     <section>
@@ -131,7 +134,7 @@
     <section>
       <h2>Display</h2>
       <label class="chk"><input type="checkbox" id="showHeat" checked> Speed heatmap</label>
-      <label class="chk"><input type="checkbox" id="showMesh"> Adaptive mesh</label>
+      <label class="chk"><input type="checkbox" id="showMesh"> Adaptive mesh (per-cell wind arrows)</label>
       <label class="chk"><input type="checkbox" id="showRotor" checked> Rotor (recirculation) zone</label>
       <div class="row"><label>Flow view</label>
         <select id="flowView">
@@ -160,8 +163,8 @@
         <summary>How it works</summary>
         <li>Domain is 40 &times; 24 ft; rulers show coordinates in feet.</li>
         <li>Solver: lattice-Boltzmann (D2Q9) CFD with LES turbulence closure.</li>
-        <li>On Simulate, an adaptive quadtree mesh is generated and refined at object boundaries. Zooming in refines the mesh further.</li>
-        <li>Streamline colors map local wind speed in MPH (blue = slow, red = fast). Flow accelerates in constrictions (venturi effect).</li>
+        <li>On Simulate, an adaptive quadtree mesh is generated and refined at object boundaries. Zooming in refines the mesh further. Enable the mesh view to see a wind arrow in every mesh cell.</li>
+        <li>Colors map local wind speed in MPH (blue = slow, red = fast). Flow accelerates in constrictions (venturi effect).</li>
         <li>The rotor zone highlights cells with reversed (recirculating) flow behind objects; its total area is reported in ft&sup2;.</li>
         <li>When vortex shedding is detected the view shows an instantaneous single-frame field of direction &amp; strength arrows.</li>
       </details>
@@ -190,10 +193,10 @@
 <script>
 "use strict";
 /* ================= Configuration ================= */
-/* World: 40 ft x 24 ft. Lattice 240x144 => 1 cell = 1/6 ft. Base canvas px: 4 px/cell => 24 px/ft. */
+/* World: 40 ft x 24 ft. Lattice 240x144 => 1 cell = 1/6 ft. Domain space: 4 px/cell => 960x576 "base px", 24 px/ft. */
 const NX = 240, NY = 144, SCALE = 4;
-const W = 960, H = 576;
-const PPF = 24;                    // base px per foot
+const W = 960, H = 576;                        // domain size in base px (constant)
+const PPF = 24;                                // base px per foot
 const FT_PER_CELL = 1/6;
 const CELL_AREA_FT2 = FT_PER_CELL * FT_PER_CELL;
 const Q = 9;
@@ -201,18 +204,24 @@ const ex = [0, 1, 0,-1, 0, 1,-1,-1, 1];
 const ey = [0, 0, 1, 0,-1, 1, 1,-1,-1];
 const wt = [4/9, 1/9,1/9,1/9,1/9, 1/36,1/36,1/36,1/36];
 const OPP = [0, 3, 4, 1, 2, 7, 8, 5, 6];
-const NU = 0.007;                  // lattice viscosity (solver)
+const NU = 0.007;
 const TAU0 = 3*NU + 0.5;
 const CSMAG = 0.03;
 const STEPS_PER_FRAME = 10;
-const NU_AIR = 1.7e-4;             // air kinematic viscosity, ft^2/s (for physical Re display)
+const NU_AIR = 1.7e-4;                         // ft^2/s
 const MPH2FTS = 5280/3600;
 
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
 
+/* ================= View state (canvas can be any size/ratio) ================= */
+let CW = W, CH = H;                            // canvas pixel size (follows layout)
+let fit = 1;                                   // cover-fit scale domain->canvas at zoom 1
+let zoom = 1, panX = 0, panY = 0;
+const totalScale = () => zoom * fit;
+
 /* ================= State ================= */
-let shapes = [];                   // coords in base px (24 px = 1 ft)
+let shapes = [];                               // coords in base px; rect may carry .rot (radians)
 let running = false;
 let barrier = new Uint8Array(NX*NY);
 let barrierDirty = true;
@@ -223,10 +232,9 @@ let mode = 'select';
 let drawPts = [];
 let drawing = false;
 let stepCount = 0;
-let zoom = 1, panX = 0, panY = 0;
 let meshZoom = 1;
 let rotorAreaFt2 = 0;
-let mousePos = null;               // base-px coords for readout
+let mousePos = null;
 
 /* LBM fields */
 const N = NX*NY;
@@ -237,7 +245,7 @@ const FEQ = new Float32Array(Q);
 
 /* wind */
 function windMph() { return parseFloat(spd.value); }
-function windU0() { return 0.03 + (windMph()/30) * 0.09; }   // lattice units
+function windU0() { return 0.03 + (windMph()/30) * 0.09; }
 function windAngle() { return parseFloat(dir.value) * Math.PI/180; }
 function windVec() { const u = windU0(), a = windAngle(); return [u*Math.cos(a), u*Math.sin(a)]; }
 
@@ -259,7 +267,14 @@ function lutIdx(t) { return Math.max(0, Math.min(NLUT-1, (t*(NLUT-1))|0)); }
 
 /* ================= Geometry (base px) ================= */
 function insideShape(s, x, y) {
-  if (s.type === 'rect')   return x >= s.x && x <= s.x+s.w && y >= s.y && y <= s.y+s.h;
+  if (s.type === 'rect') {
+    if (!s.rot) return x >= s.x && x <= s.x+s.w && y >= s.y && y <= s.y+s.h;
+    const cx = s.x+s.w/2, cy = s.y+s.h/2;
+    const c = Math.cos(-s.rot), n = Math.sin(-s.rot);
+    const dx = x-cx, dy = y-cy;
+    const lx = dx*c - dy*n, ly = dx*n + dy*c;
+    return Math.abs(lx) <= s.w/2 && Math.abs(ly) <= s.h/2;
+  }
   if (s.type === 'circle') { const dx = x-s.cx, dy = y-s.cy; return dx*dx + dy*dy <= s.r*s.r; }
   const p = s.pts; let inside = false;
   for (let i = 0, j = p.length-1; i < p.length; j = i++) {
@@ -275,13 +290,18 @@ function shapeCenter(s) {
   let cx = 0, cy = 0; for (const p of s.pts) { cx += p.x; cy += p.y; }
   return [cx/s.pts.length, cy/s.pts.length];
 }
-function shapeBBox(s) {
-  if (s.type === 'rect') return [s.w, s.h];
+function shapeBBox(s) {                        // axis-aligned bbox (accounts for rotation)
+  if (s.type === 'rect') {
+    if (!s.rot) return [s.w, s.h];
+    const c = Math.abs(Math.cos(s.rot)), n = Math.abs(Math.sin(s.rot));
+    return [s.w*c + s.h*n, s.w*n + s.h*c];
+  }
   if (s.type === 'circle') return [2*s.r, 2*s.r];
   let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
   for (const p of s.pts) { minx = Math.min(minx,p.x); maxx = Math.max(maxx,p.x); miny = Math.min(miny,p.y); maxy = Math.max(maxy,p.y); }
   return [maxx-minx, maxy-miny];
 }
+function labelDims(s) { return s.type === 'rect' ? [s.w, s.h] : shapeBBox(s); }
 function shapeSize(s) { const [w,h] = shapeBBox(s); return Math.max(w,h); }
 function moveShape(s, dx, dy) {
   if (s.type === 'rect') { s.x += dx; s.y += dy; }
@@ -293,10 +313,20 @@ function scaleShape(s, k) {
   else if (s.type === 'circle') s.r = Math.max(7, s.r*k);
   else { const [cx, cy] = shapeCenter(s); for (const p of s.pts) { p.x = cx + (p.x-cx)*k; p.y = cy + (p.y-cy)*k; } }
 }
+function rotateShape(s, ang) {
+  if (s.type === 'circle') return;
+  if (s.type === 'rect') { s.rot = (s.rot || 0) + ang; return; }
+  const [cx, cy] = shapeCenter(s);
+  const c = Math.cos(ang), n = Math.sin(ang);
+  for (const p of s.pts) {
+    const dx = p.x-cx, dy = p.y-cy;
+    p.x = cx + dx*c - dy*n; p.y = cy + dx*n + dy*c;
+  }
+}
 function addShape(type, x, y) {
   x = Math.max(30, Math.min(W-30, x)); y = Math.max(30, Math.min(H-30, y));
-  if (type === 'rect')   shapes.push({type:'rect', x:x-2.5*PPF, y:y-1.5*PPF, w:5*PPF, h:3*PPF});   // 5 x 3 ft
-  if (type === 'circle') shapes.push({type:'circle', cx:x, cy:y, r:1.5*PPF});                      // 3 ft dia
+  if (type === 'rect')   shapes.push({type:'rect', x:x-2.5*PPF, y:y-1.5*PPF, w:5*PPF, h:3*PPF, rot:0});
+  if (type === 'circle') shapes.push({type:'circle', cx:x, cy:y, r:1.5*PPF});
   if (type === 'tri')    shapes.push({type:'poly', pts:[{x:x, y:y-1.6*PPF},{x:x+1.5*PPF, y:y+1.1*PPF},{x:x-1.5*PPF, y:y+1.1*PPF}]});
   barrierDirty = true;
 }
@@ -311,7 +341,7 @@ function cellMixed(x, y, w, h) {
 }
 function buildMesh() {
   meshRects = [];
-  const minSize = Math.max(3, 24/zoom);        // finer mesh at higher zoom
+  const minSize = Math.max(3, 24/zoom);
   const rec = (x, y, w, h, depth) => {
     const mixed = cellMixed(x, y, w, h);
     if ((depth < 3) || (mixed && w > minSize && depth < 11)) {
@@ -464,9 +494,10 @@ function drawStreamlines() {
   const [ux0, uy0] = windVec();
   const u0 = Math.hypot(ux0, uy0);
   const umax = 1.6*u0;
+  const ts = totalScale();
   const buckets = new Array(NLUT);
   const seeds = [];
-  const gap = Math.max(8, 26/zoom);            // denser lines when zoomed in
+  const gap = Math.max(8, 26/ts);
   if (ux0 >  0.15*u0) for (let y = gap/2; y < H; y += gap) seeds.push([3, y]);
   if (ux0 < -0.15*u0) for (let y = gap/2; y < H; y += gap) seeds.push([W-3, y]);
   if (uy0 >  0.15*u0) for (let x = gap/2; x < W; x += gap) seeds.push([x, 3]);
@@ -491,19 +522,20 @@ function drawStreamlines() {
       px = nx2; py = ny2;
     }
   }
-  ctx.lineWidth = 1.5/zoom; ctx.lineCap = 'round';
+  ctx.lineWidth = 1.5/ts; ctx.lineCap = 'round';
   for (let b = 0; b < NLUT; b++) if (buckets[b]) { ctx.strokeStyle = LUTCSS[b]; ctx.stroke(buckets[b]); }
 }
 function drawArrows() {
   const [ux0, uy0] = windVec();
   const umax = 1.6*Math.hypot(ux0, uy0);
   const v = [0,0];
-  const gap = Math.max(7, 24/zoom);
-  /* visible base-px region only */
-  const bx0 = Math.max(0, -panX/zoom), bx1 = Math.min(W, (W-panX)/zoom);
-  const by0 = Math.max(0, -panY/zoom), by1 = Math.min(H, (H-panY)/zoom);
-  ctx.lineWidth = 1.6/zoom; ctx.lineCap = 'round';
-  const hl = 5/Math.sqrt(zoom), hw = 3/Math.sqrt(zoom);
+  const ts = totalScale();
+  const gap = Math.max(6, 24/ts);
+  const bx0 = Math.max(0, -panX/ts), bx1 = Math.min(W, (CW-panX)/ts);
+  const by0 = Math.max(0, -panY/ts), by1 = Math.min(H, (CH-panY)/ts);
+  ctx.lineWidth = 1.6/ts; ctx.lineCap = 'round';
+  const rz = Math.sqrt(ts);
+  const hl = 5/rz, hw = 3/rz;
   for (let y = by0 + gap/2; y < by1; y += gap) {
     for (let x = bx0 + gap/2; x < bx1; x += gap) {
       if (inBarrierPx(x, y)) continue;
@@ -511,7 +543,7 @@ function drawArrows() {
       const sp = Math.hypot(v[0], v[1]);
       if (sp < 1e-5) continue;
       const t = Math.min(1, sp/umax);
-      const len = (4 + t*16)/Math.sqrt(zoom);
+      const len = (4 + t*16)/rz;
       const dx = v[0]/sp, dy = v[1]/sp;
       const x2 = x + dx*len, y2 = y + dy*len;
       ctx.strokeStyle = LUTCSS[lutIdx(t)];
@@ -549,94 +581,190 @@ function drawHeatmap() {
 }
 
 /* ================= Rulers (feet) ================= */
-const RT = 20, RL = 34;                        // ruler strip sizes (screen px)
+const RT = 20, RL = 34;
 function fmtFt(v) { return (Math.abs(v % 1) < 1e-9) ? String(Math.round(v)) : v.toFixed(1); }
 function drawRulers() {
   ctx.fillStyle = 'rgba(13,16,22,0.88)';
-  ctx.fillRect(0, 0, W, RT);
-  ctx.fillRect(0, 0, RL, H);
+  ctx.fillRect(0, 0, CW, RT);
+  ctx.fillRect(0, 0, RL, CH);
   ctx.strokeStyle = '#2a3242';
-  ctx.beginPath(); ctx.moveTo(0, RT+0.5); ctx.lineTo(W, RT+0.5); ctx.moveTo(RL+0.5, RT); ctx.lineTo(RL+0.5, H); ctx.stroke();
-  const ppf = PPF*zoom;
+  ctx.beginPath(); ctx.moveTo(0, RT+0.5); ctx.lineTo(CW, RT+0.5); ctx.moveTo(RL+0.5, RT); ctx.lineTo(RL+0.5, CH); ctx.stroke();
+  const ts = totalScale();
+  const ppf = PPF*ts;
   let step = 10;
   for (const s of [0.25, 0.5, 1, 2, 5, 10]) if (s*ppf >= 44) { step = s; break; }
   const minor = step/5;
   ctx.fillStyle = '#8b96a8'; ctx.font = '9px sans-serif'; ctx.strokeStyle = '#5d6a80';
-  /* X axis */
   ctx.textAlign = 'left';
-  let ft0 = Math.floor(((RL - panX)/zoom)/PPF / minor) * minor;
+  let ft0 = Math.floor(((RL - panX)/ts)/PPF / minor) * minor;
   ctx.beginPath();
   for (let ftv = ft0; ftv <= 40.0001; ftv += minor) {
     if (ftv < -1e-9) continue;
-    const sx = ftv*PPF*zoom + panX;
-    if (sx < RL) continue; if (sx > W) break;
+    const sx = ftv*PPF*ts + panX;
+    if (sx < RL) continue; if (sx > CW) break;
     const major = Math.abs(ftv/step - Math.round(ftv/step)) < 1e-6;
     ctx.moveTo(sx, RT); ctx.lineTo(sx, RT - (major ? 7 : 3.5));
     if (major) ctx.fillText(fmtFt(ftv), sx+3, 9);
   }
   ctx.stroke();
-  /* Y axis */
-  let fy0 = Math.floor(((RT - panY)/zoom)/PPF / minor) * minor;
+  let fy0 = Math.floor(((RT - panY)/ts)/PPF / minor) * minor;
   ctx.beginPath();
   for (let ftv = fy0; ftv <= 24.0001; ftv += minor) {
     if (ftv < -1e-9) continue;
-    const sy = ftv*PPF*zoom + panY;
-    if (sy < RT) continue; if (sy > H) break;
+    const sy = ftv*PPF*ts + panY;
+    if (sy < RT) continue; if (sy > CH) break;
     const major = Math.abs(ftv/step - Math.round(ftv/step)) < 1e-6;
     ctx.moveTo(RL, sy); ctx.lineTo(RL - (major ? 7 : 3.5), sy);
     if (major) ctx.fillText(fmtFt(ftv), 3, sy - 3);
   }
   ctx.stroke();
-  /* corner + unit */
   ctx.fillStyle = 'rgba(13,16,22,1)'; ctx.fillRect(0, 0, RL, RT);
   ctx.fillStyle = '#8b96a8'; ctx.fillText('ft', 12, 13);
-  /* cursor position readout */
   if (mousePos) {
     const t = `x ${(mousePos[0]/PPF).toFixed(1)} ft   y ${(mousePos[1]/PPF).toFixed(1)} ft`;
     ctx.font = '11px sans-serif';
     const tw = ctx.measureText(t).width;
     ctx.fillStyle = 'rgba(13,16,22,0.8)';
-    ctx.fillRect(RL+8, H-24, tw+14, 18);
+    ctx.fillRect(RL+8, CH-24, tw+14, 18);
     ctx.fillStyle = '#8b96a8';
-    ctx.fillText(t, RL+15, H-11);
+    ctx.fillText(t, RL+15, CH-11);
   }
 }
 
 /* ================= Rendering ================= */
+function traceShape(s) {
+  ctx.beginPath();
+  if (s.type === 'rect') {
+    if (!s.rot) ctx.rect(s.x, s.y, s.w, s.h);
+    else {
+      const cx = s.x+s.w/2, cy = s.y+s.h/2, c = Math.cos(s.rot), n = Math.sin(s.rot);
+      const pts = [[-s.w/2,-s.h/2],[s.w/2,-s.h/2],[s.w/2,s.h/2],[-s.w/2,s.h/2]];
+      pts.forEach(([lx,ly], i) => {
+        const px = cx + lx*c - ly*n, py = cy + lx*n + ly*c;
+        i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+      });
+      ctx.closePath();
+    }
+  }
+  else if (s.type === 'circle') ctx.arc(s.cx, s.cy, s.r, 0, 7);
+  else { ctx.moveTo(s.pts[0].x, s.pts[0].y); for (let i = 1; i < s.pts.length; i++) ctx.lineTo(s.pts[i].x, s.pts[i].y); ctx.closePath(); }
+}
 function drawShapes() {
+  const ts = totalScale();
   for (const s of shapes) {
-    ctx.beginPath();
-    if (s.type === 'rect') ctx.rect(s.x, s.y, s.w, s.h);
-    else if (s.type === 'circle') ctx.arc(s.cx, s.cy, s.r, 0, 7);
-    else { ctx.moveTo(s.pts[0].x, s.pts[0].y); for (let i = 1; i < s.pts.length; i++) ctx.lineTo(s.pts[i].x, s.pts[i].y); ctx.closePath(); }
+    traceShape(s);
     ctx.fillStyle = '#242b39';
     ctx.fill();
     ctx.strokeStyle = s === selected ? '#4da3ff' : '#5d6a80';
-    ctx.lineWidth = (s === selected ? 2.5 : 1.5)/zoom;
+    ctx.lineWidth = (s === selected ? 2.5 : 1.5)/ts;
     ctx.stroke();
-    /* dimension label on selected shape */
     if (s === selected) {
+      const [lw, lh] = labelDims(s);
       const [bw, bh] = shapeBBox(s);
       const [cx, cy] = shapeCenter(s);
-      const lab = s.type === 'circle' ? `⌀ ${(bw/PPF).toFixed(1)} ft` : `${(bw/PPF).toFixed(1)} × ${(bh/PPF).toFixed(1)} ft`;
-      ctx.font = `${11/zoom}px sans-serif`;
+      const lab = s.type === 'circle' ? `⌀ ${(lw/PPF).toFixed(1)} ft` : `${(lw/PPF).toFixed(1)} × ${(lh/PPF).toFixed(1)} ft`;
+      ctx.font = `${11/ts}px sans-serif`;
       ctx.textAlign = 'center';
       ctx.fillStyle = '#9fc6ff';
-      ctx.fillText(lab, cx, cy - bh/2 - 6/zoom);
+      ctx.fillText(lab, cx, cy + bh/2 + 14/ts);
       ctx.textAlign = 'left';
     }
   }
 }
+
+/* ---- selection handles: scale (corner) + rotate (top) ---- */
+function handlePositions() {
+  const s = selected;
+  const [bw, bh] = shapeBBox(s);
+  const [cx, cy] = shapeCenter(s);
+  const ts = totalScale();
+  const hr = 11/ts;
+  return {
+    sc: [cx + bw/2 + hr*1.3, cy + bh/2 + hr*1.3],   // scale handle: past bottom-right corner
+    ro: [cx, cy - bh/2 - 26/ts],                     // rotate handle: above shape
+    cx, cy, bh, hr
+  };
+}
+function drawHandles() {
+  if (!selected) return;
+  const ts = totalScale();
+  const {sc, ro, cx, cy, bh, hr} = handlePositions();
+  ctx.lineWidth = 1.4/ts;
+  ctx.strokeStyle = 'rgba(77,163,255,0.55)';
+  ctx.beginPath(); ctx.moveTo(cx, cy - bh/2); ctx.lineTo(ro[0], ro[1]); ctx.stroke();
+  for (const pos of [sc, ro]) {
+    ctx.beginPath(); ctx.arc(pos[0], pos[1], hr, 0, 7);
+    ctx.fillStyle = '#16233a'; ctx.fill();
+    ctx.strokeStyle = '#4da3ff'; ctx.stroke();
+  }
+  const a = hr*0.5;
+  ctx.strokeStyle = '#b9d7ff'; ctx.lineCap = 'round';
+  /* scale icon: diagonal double-headed arrow */
+  ctx.beginPath();
+  ctx.moveTo(sc[0]-a, sc[1]-a); ctx.lineTo(sc[0]+a, sc[1]+a);
+  ctx.moveTo(sc[0]-a, sc[1]-a); ctx.lineTo(sc[0]-a+a*0.75, sc[1]-a);
+  ctx.moveTo(sc[0]-a, sc[1]-a); ctx.lineTo(sc[0]-a, sc[1]-a+a*0.75);
+  ctx.moveTo(sc[0]+a, sc[1]+a); ctx.lineTo(sc[0]+a-a*0.75, sc[1]+a);
+  ctx.moveTo(sc[0]+a, sc[1]+a); ctx.lineTo(sc[0]+a, sc[1]+a-a*0.75);
+  ctx.stroke();
+  /* rotate icon: arc with arrowhead */
+  ctx.beginPath(); ctx.arc(ro[0], ro[1], a, -2.4, 1.5); ctx.stroke();
+  const tipx = ro[0] + a*Math.cos(1.5), tipy = ro[1] + a*Math.sin(1.5);
+  const tx = -Math.sin(1.5), ty = Math.cos(1.5);          // tangent
+  ctx.beginPath();
+  ctx.moveTo(tipx, tipy); ctx.lineTo(tipx - (tx*0.8 + Math.cos(1.5)*0.5)*a, tipy - (ty*0.8 + Math.sin(1.5)*0.5)*a);
+  ctx.moveTo(tipx, tipy); ctx.lineTo(tipx - (tx*0.8 - Math.cos(1.5)*0.5)*a, tipy - (ty*0.8 - Math.sin(1.5)*0.5)*a);
+  ctx.stroke();
+}
+function hitHandle(p) {
+  if (!selected || mode === 'draw') return null;
+  const {sc, ro, hr} = handlePositions();
+  const rr = hr*1.8;
+  if (Math.hypot(p.x-sc[0], p.y-sc[1]) < rr) return 'scale';
+  if (Math.hypot(p.x-ro[0], p.y-ro[1]) < rr) return 'rotate';
+  return null;
+}
+
 function drawMeshOverlay() {
   ctx.strokeStyle = 'rgba(160,190,230,0.22)';
-  ctx.lineWidth = 0.75/zoom;
+  ctx.lineWidth = 0.75/totalScale();
   ctx.beginPath();
   for (const r of meshRects) ctx.rect(r.x, r.y, r.w, r.h);
   ctx.stroke();
 }
+/* per-mesh-cell wind arrows (shown when adaptive mesh view is enabled) */
+function drawMeshArrows() {
+  const [ux0, uy0] = windVec();
+  const umax = 1.6*Math.hypot(ux0, uy0);
+  const ts = totalScale();
+  const v = [0,0];
+  const bx0 = -panX/ts, bx1 = (CW-panX)/ts, by0 = -panY/ts, by1 = (CH-panY)/ts;
+  ctx.lineWidth = 1.1/ts; ctx.lineCap = 'round';
+  for (const r of meshRects) {
+    const x = r.x + r.w/2, y = r.y + r.h/2;
+    if (x < bx0 || x > bx1 || y < by0 || y > by1) continue;   // offscreen
+    if (inBarrierPx(x, y)) continue;
+    sampleVel(x, y, v);
+    const sp = Math.hypot(v[0], v[1]);
+    if (sp < 1e-5) continue;
+    const t = Math.min(1, sp/umax);
+    const len = Math.min(r.w, r.h) * (0.25 + 0.35*t);
+    const dx = v[0]/sp, dy = v[1]/sp;
+    const x1 = x - dx*len/2, y1 = y - dy*len/2;
+    const x2 = x + dx*len/2, y2 = y + dy*len/2;
+    const hl = Math.min(5/ts, len*0.45);
+    ctx.strokeStyle = LUTCSS[lutIdx(t)];
+    ctx.beginPath();
+    ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+    ctx.moveTo(x2, y2); ctx.lineTo(x2 - dx*hl - dy*hl*0.55, y2 - dy*hl + dx*hl*0.55);
+    ctx.moveTo(x2, y2); ctx.lineTo(x2 - dx*hl + dy*hl*0.55, y2 - dy*hl - dx*hl*0.55);
+    ctx.stroke();
+  }
+}
 function drawDrawPath() {
   if (drawPts.length < 2) return;
-  ctx.strokeStyle = '#ff9d4d'; ctx.lineWidth = 2/zoom; ctx.setLineDash([6/zoom, 4/zoom]);
+  const ts = totalScale();
+  ctx.strokeStyle = '#ff9d4d'; ctx.lineWidth = 2/ts; ctx.setLineDash([6/ts, 4/ts]);
   ctx.beginPath();
   ctx.moveTo(drawPts[0].x, drawPts[0].y);
   for (let i = 1; i < drawPts.length; i++) ctx.lineTo(drawPts[i].x, drawPts[i].y);
@@ -645,37 +773,41 @@ function drawDrawPath() {
 }
 
 let turbLevel = 0, fpsAcc = 0, fpsN = 0, lastT = performance.now();
-let stepsPF = STEPS_PER_FRAME;               // adaptive: throttles on slow (mobile) devices
+let stepsPF = STEPS_PER_FRAME;
 function frame(now) {
   requestAnimationFrame(frame);
   if (barrierDirty) { rasterize(); buildMesh(); }
-  else if (Math.abs(meshZoom - zoom) > 0.01) buildMesh();     // refine mesh on zoom change
+  else if (Math.abs(meshZoom - zoom) > 0.01) buildMesh();
   if (running) {
     for (let s = 0; s < stepsPF; s++) lbmStep();
     const tl = probeTurbulence();
     turbLevel = turbLevel*0.9 + tl*0.1;
   }
+  const ts = totalScale();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, W, H);
-  ctx.setTransform(zoom, 0, 0, zoom, panX, panY);
+  ctx.clearRect(0, 0, CW, CH);
+  ctx.setTransform(ts, 0, 0, ts, panX, panY);
+  const meshShown = document.getElementById('showMesh').checked || now < meshFlashUntil;
   if (running || stepCount > 0) {
     if (document.getElementById('showHeat').checked) drawHeatmap();
-    if (running || stepCount > 0) {
-      const rotorOn = computeRotor();
-      if (rotorOn) { ctx.imageSmoothingEnabled = true; ctx.drawImage(rotCv, 0, 0, W, H); }
-    }
+    const rotorOn = computeRotor();
+    if (rotorOn) { ctx.imageSmoothingEnabled = true; ctx.drawImage(rotCv, 0, 0, W, H); }
     const turbulent = turbLevel > 0.045;
     const view = document.getElementById('flowView').value;
     const useArrows = view === 'arrows' || (view === 'auto' && turbulent);
-    if (useArrows) drawArrows(); else drawStreamlines();
+    if (!meshShown) { if (useArrows) drawArrows(); else drawStreamlines(); }
     const badge = document.getElementById('regime');
     if (running) {
       badge.textContent = turbulent ? 'turbulent' : 'laminar';
       badge.className = 'badge ' + (turbulent ? 'turb' : 'lam');
     }
   }
-  if (document.getElementById('showMesh').checked || now < meshFlashUntil) drawMeshOverlay();
+  if (meshShown) {
+    drawMeshOverlay();
+    if (stepCount > 0) drawMeshArrows();      // one wind arrow per mesh cell
+  }
   drawShapes();
+  drawHandles();
   drawDrawPath();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   drawRulers();
@@ -684,7 +816,7 @@ function frame(now) {
   if (fpsAcc > 500) {
     const fps = Math.round(1000/(fpsAcc/fpsN));
     document.getElementById('fpsVal').textContent = running ? fps : '–';
-    if (running) {                            // auto performance scaling
+    if (running) {
       if (fps < 28) stepsPF = Math.max(4, stepsPF - 1);
       else if (fps > 52 && stepsPF < STEPS_PER_FRAME) stepsPF++;
     }
@@ -696,30 +828,49 @@ function frame(now) {
 /* ================= Status ================= */
 function updateStatus() {
   const mph = windMph();
-  let L = 0; for (const s of shapes) L = Math.max(L, shapeSize(s)/PPF);   // ft
+  let L = 0; for (const s of shapes) L = Math.max(L, shapeSize(s)/PPF);
   const re = L ? Math.round(mph*MPH2FTS*L/NU_AIR) : 0;
   document.getElementById('reVal').textContent = re ? re.toLocaleString() : '–';
   document.getElementById('legMax').textContent = Math.round(1.6*mph) + ' MPH';
   const sv = document.getElementById('selVal');
   if (selected) {
-    const [bw, bh] = shapeBBox(selected);
-    sv.textContent = selected.type === 'circle' ? `⌀ ${(bw/PPF).toFixed(1)} ft` : `${(bw/PPF).toFixed(1)} × ${(bh/PPF).toFixed(1)} ft`;
+    const [lw, lh] = labelDims(selected);
+    sv.textContent = selected.type === 'circle' ? `⌀ ${(lw/PPF).toFixed(1)} ft` : `${(lw/PPF).toFixed(1)} × ${(lh/PPF).toFixed(1)} ft`;
   } else sv.textContent = '–';
   document.getElementById('shapeBar').style.display = selected ? 'flex' : 'none';
 }
 
-/* ================= Zoom / pan ================= */
+/* ================= Layout / zoom / pan ================= */
+function layoutCanvas() {
+  const r = cv.getBoundingClientRect();
+  const w = Math.max(240, Math.round(r.width)), h = Math.max(160, Math.round(r.height));
+  if (w === CW && h === CH) return;
+  cv.width = w; cv.height = h;
+  CW = w; CH = h;
+  fit = Math.max(CW/W, CH/H);                  // cover: canvas fully used, domain may crop -> pan
+  clampPan();
+}
 function clampPan() {
-  panX = Math.min(0, Math.max(W - W*zoom, panX));
-  panY = Math.min(0, Math.max(H - H*zoom, panY));
+  const ts = totalScale();
+  panX = Math.min(0, Math.max(CW - W*ts, panX));
+  panY = Math.min(0, Math.max(CH - H*ts, panY));
 }
 function setZoom(nz, sx, sy) {
   nz = Math.max(1, Math.min(8, nz));
-  const bx = (sx - panX)/zoom, by = (sy - panY)/zoom;
+  const ts0 = totalScale();
+  const bx = (sx - panX)/ts0, by = (sy - panY)/ts0;
   zoom = nz;
-  panX = sx - bx*zoom; panY = sy - by*zoom;
+  const ts1 = totalScale();
+  panX = sx - bx*ts1; panY = sy - by*ts1;
   clampPan();
   document.getElementById('zoomVal').textContent = zoom.toFixed(1) + '×';
+}
+function resetView() {
+  zoom = 1;
+  const ts = totalScale();
+  panX = (CW - W*ts)/2; panY = (CH - H*ts)/2;
+  clampPan();
+  document.getElementById('zoomVal').textContent = '1.0×';
 }
 
 /* ================= UI wiring ================= */
@@ -750,7 +901,6 @@ document.getElementById('simBtn').addEventListener('click', () => {
     if (stepCount === 0) initFluid();
     b.innerHTML = '&#10074;&#10074; Pause';
     toast('Adaptive mesh generated → running CFD…');
-    if (isMobile()) setNav(true);            // free up screen for the canvas
   } else {
     b.innerHTML = '&#9654; Simulate';
     document.getElementById('regime').textContent = 'paused';
@@ -768,22 +918,20 @@ document.getElementById('drawBtn').addEventListener('click', () => {
   cv.classList.toggle('draw', mode === 'draw');
   if (mode === 'draw') toast('Draw a shape on the canvas. End near your start point to close it.');
 });
-document.getElementById('zin').addEventListener('click', () => setZoom(zoom*1.4, W/2, H/2));
-document.getElementById('zout').addEventListener('click', () => setZoom(zoom/1.4, W/2, H/2));
-document.getElementById('zreset').addEventListener('click', () => { zoom = 1; panX = 0; panY = 0; document.getElementById('zoomVal').textContent = '1.0×'; });
+document.getElementById('zin').addEventListener('click', () => setZoom(zoom*1.4, CW/2, CH/2));
+document.getElementById('zout').addEventListener('click', () => setZoom(zoom/1.4, CW/2, CH/2));
+document.getElementById('zreset').addEventListener('click', resetView);
 
-/* collapsible panel */
+/* collapsible panel (side drawer on desktop, bottom sheet on mobile) */
 const menuBtn = document.getElementById('menuBtn');
-const isMobile = () => matchMedia('(max-width: 768px)').matches;
 function setNav(collapsed) {
   document.body.classList.toggle('nav-collapsed', collapsed);
   menuBtn.innerHTML = collapsed ? '&#9776;' : '&#10005;';
 }
 menuBtn.addEventListener('click', () => setNav(!document.body.classList.contains('nav-collapsed')));
-document.getElementById('backdrop').addEventListener('click', () => setNav(true));
-setNav(isMobile());                          // start collapsed on small screens
+setNav(false);
 
-/* selected-shape toolbar (touch-friendly resize/delete) */
+/* selected-shape toolbar */
 document.getElementById('growBtn').addEventListener('click', () => {
   if (selected) { scaleShape(selected, 1.15); barrierDirty = true; updateStatus(); }
 });
@@ -803,14 +951,15 @@ document.getElementById('delBtn').addEventListener('click', () => {
   }
 })();
 
-/* screen <-> base px */
+/* screen <-> domain (base px) */
 function screenPos(e) {
   const r = cv.getBoundingClientRect();
-  return { x: (e.clientX - r.left) * (W/r.width), y: (e.clientY - r.top) * (H/r.height) };
+  return { x: (e.clientX - r.left) * (CW/r.width), y: (e.clientY - r.top) * (CH/r.height) };
 }
 function basePos(e) {
   const s = screenPos(e);
-  return { x: (s.x - panX)/zoom, y: (s.y - panY)/zoom };
+  const ts = totalScale();
+  return { x: (s.x - panX)/ts, y: (s.y - panY)/ts };
 }
 
 /* palette drag & drop */
@@ -845,17 +994,18 @@ window.addEventListener('pointerup', e => {
   }
 });
 
-/* canvas interaction: draw / select / move / pan / pinch-zoom */
+/* canvas interaction: draw / select / move / pan / pinch-zoom / handles */
 let dragShapeRef = null, lastPt = null, panning = false, panStart = null;
-const activePtrs = new Map();                // pointerId -> screen pos (multi-touch)
+let handleMode = null, handlePrev = null;      // 'scale' | 'rotate'
+const activePtrs = new Map();
 let pinch = null;
 cv.addEventListener('pointerdown', e => {
   const s = screenPos(e);
   activePtrs.set(e.pointerId, s);
   cv.setPointerCapture(e.pointerId);
-  if (activePtrs.size === 2) {               // second finger => pinch zoom, cancel gestures
+  if (activePtrs.size === 2) {
     drawing = false; drawPts = [];
-    dragShapeRef = null; lastPt = null;
+    dragShapeRef = null; lastPt = null; handleMode = null;
     panning = false; cv.classList.remove('panning');
     const [a, b] = [...activePtrs.values()];
     pinch = { d0: Math.hypot(a.x-b.x, a.y-b.y) || 1, z0: zoom };
@@ -864,6 +1014,9 @@ cv.addEventListener('pointerdown', e => {
   if (activePtrs.size > 2) return;
   const p = basePos(e);
   if (mode === 'draw') { drawing = true; drawPts = [p]; return; }
+  /* handles take priority over re-selection */
+  const hm = hitHandle(p);
+  if (hm) { handleMode = hm; handlePrev = p; return; }
   selected = null;
   for (let i = shapes.length-1; i >= 0; i--) {
     if (insideShape(shapes[i], p.x, p.y)) { selected = shapes[i]; break; }
@@ -885,9 +1038,23 @@ cv.addEventListener('pointermove', e => {
   }
   const p = basePos(e);
   mousePos = [p.x, p.y];
+  if (handleMode && selected) {
+    const [cx, cy] = shapeCenter(selected);
+    if (handleMode === 'scale') {
+      const d0 = Math.hypot(handlePrev.x-cx, handlePrev.y-cy);
+      const d1 = Math.hypot(p.x-cx, p.y-cy);
+      if (d0 > 4) scaleShape(selected, Math.max(0.5, Math.min(2, d1/d0)));
+    } else {
+      const a0 = Math.atan2(handlePrev.y-cy, handlePrev.x-cx);
+      const a1 = Math.atan2(p.y-cy, p.x-cx);
+      rotateShape(selected, a1-a0);
+    }
+    handlePrev = p; barrierDirty = true; probeHist.length = 0; updateStatus();
+    return;
+  }
   if (drawing) {
     const lp = drawPts[drawPts.length-1];
-    if (Math.hypot(p.x-lp.x, p.y-lp.y) > 3/zoom) drawPts.push(p);
+    if (Math.hypot(p.x-lp.x, p.y-lp.y) > 3/totalScale()) drawPts.push(p);
   } else if (dragShapeRef && lastPt) {
     moveShape(dragShapeRef, p.x-lastPt.x, p.y-lastPt.y);
     lastPt = p; barrierDirty = true; probeHist.length = 0;
@@ -903,6 +1070,7 @@ cv.addEventListener('pointerup', e => {
   activePtrs.delete(e.pointerId);
   if (pinch) { if (activePtrs.size < 2) pinch = null; return; }
   if (drawing) { drawing = false; finishDrawing(); return; }
+  handleMode = null; handlePrev = null;
   dragShapeRef = null; lastPt = null;
   panning = false; cv.classList.remove('panning');
 });
@@ -910,6 +1078,7 @@ cv.addEventListener('pointercancel', e => {
   activePtrs.delete(e.pointerId);
   if (activePtrs.size < 2) pinch = null;
   drawing = false; drawPts = [];
+  handleMode = null; handlePrev = null;
   dragShapeRef = null; lastPt = null;
   panning = false; cv.classList.remove('panning');
 });
@@ -956,7 +1125,7 @@ function finishDrawing() {
   const pts = drawPts; drawPts = [];
   if (pts.length < 3) { toast('⚠ Not enough points — shape discarded.'); return; }
   const d = Math.hypot(pts[0].x - pts[pts.length-1].x, pts[0].y - pts[pts.length-1].y);
-  const closeThr = 30/zoom;
+  const closeThr = 30/totalScale();
   if (d > closeThr) {
     toast(`⚠ Shape is NOT closed (gap ≈ ${(d/PPF).toFixed(1)} ft). End near your start point.`, 3500);
     return;
@@ -968,9 +1137,13 @@ function finishDrawing() {
 }
 
 /* ================= Boot ================= */
-addShape('rect', W*0.32, H*0.5);     // 5 ft x 3 ft rectangle, the demo case
+addShape('rect', W*0.32, H*0.5);               // 5 ft x 3 ft rectangle
+layoutCanvas();
+resetView();
 rasterize(); buildMesh();
 updateStatus();
+new ResizeObserver(() => { layoutCanvas(); }).observe(cv);
+window.addEventListener('orientationchange', () => setTimeout(() => { layoutCanvas(); resetView(); }, 300));
 requestAnimationFrame(frame);
 </script>
 </body>
