@@ -80,16 +80,43 @@
     #zoomCtl button{width:40px; height:40px;}
     input[type=range]{height:28px;}
   }
+  /* ---- 3D mode ---- */
+  #modeTabs{display:flex; gap:6px; margin-bottom:12px;}
+  #modeTabs button{flex:1; font-weight:600;}
+  #modeTabs button.active{background:var(--accent); border-color:var(--accent); color:#06121f;}
+  body.mode-3d .sec2d{display:none;}
+  body:not(.mode-3d) .sec3d{display:none;}
+  body.mode-3d #wrap{display:none;}
+  #wrap3d{position:relative; width:100%; height:100%; display:none; min-height:200px;}
+  body.mode-3d #wrap3d{display:block;}
+  #cv3d{width:100%; height:100%; display:block; border:1px solid var(--border); border-radius:12px; background:#0a0d12; touch-action:none;}
+  #camCtl{position:absolute; top:8px; right:8px; display:grid; grid-template-columns:repeat(3,36px); gap:4px;}
+  #camCtl button{width:36px; height:32px; padding:0; font-size:13px; background:#161b24dd;}
+  #ov3d{position:absolute; inset:0; background:#0a0d12d8; display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; border-radius:12px; z-index:10; text-align:center; padding:20px;}
+  #ov3d.show{display:flex;}
+  #pbar{width:70%; max-width:340px; height:10px; background:#1d2431; border-radius:5px; overflow:hidden;}
+  #pfill{height:100%; width:0%; background:var(--accent); transition:width .2s;}
+  .tgrid{display:grid; grid-template-columns:52px 1fr 1fr 1fr; gap:4px 6px; align-items:center; font-size:11px; color:var(--muted);}
+  .tgrid input[type=range]{width:100%; margin:0; height:22px;}
+  .catbtns{display:flex; gap:6px; margin-bottom:8px;}
+  .catbtns button{flex:1;}
+  .catbtns button.active{background:#243147; border-color:var(--accent); color:var(--accent);}
+  #locRow{display:flex; gap:6px;}
+  #locName{flex:1; background:var(--bg); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:7px 9px; font-size:13px; min-width:0;}
 </style>
 </head>
 <body>
 <button id="menuBtn" title="Toggle panel">&#9776;</button>
 <div id="app">
   <aside>
-    <h1>Wind Tunnel 2D</h1>
-    <div class="sub">CFD wind flow &amp; turbulence &middot; 40 &times; 24 ft domain</div>
+    <h1>Wind Tunnel</h1>
+    <div class="sub">CFD wind flow &amp; turbulence simulator</div>
+    <div id="modeTabs">
+      <button id="mode2d" class="active">2D</button>
+      <button id="mode3d">3D</button>
+    </div>
 
-    <section>
+    <section class="sec2d">
       <h2>Objects</h2>
       <div class="palette">
         <div class="pal" data-shape="rect" title="Drag rectangle onto canvas (5 × 3 ft)">
@@ -109,7 +136,7 @@
       <div class="hint">Drag a shape onto the canvas (or click to place). Click a shape to select it: use the corner handle to scale, the top handle to rotate, the +/&minus;/&#128465; toolbar, or double-click to delete. Scroll or pinch = zoom &middot; drag background = pan. Drawn shapes must be closed.</div>
     </section>
 
-    <section>
+    <section class="sec2d">
       <h2>Wind</h2>
       <div class="row">
         <div id="compass"><div id="arrow">
@@ -124,14 +151,14 @@
       </div>
     </section>
 
-    <section>
+    <section class="sec2d">
       <div class="btnrow">
         <button id="simBtn" class="primary">&#9654; Simulate</button>
         <button id="resetBtn">Reset flow</button>
       </div>
     </section>
 
-    <section>
+    <section class="sec2d">
       <h2>Display</h2>
       <label class="chk"><input type="checkbox" id="showHeat" checked> Speed heatmap</label>
       <label class="chk"><input type="checkbox" id="showMesh"> Adaptive mesh (per-cell wind arrows)</label>
@@ -147,7 +174,7 @@
       <div class="leg-lab"><span>0 MPH</span><span id="legMax">8 MPH</span></div>
     </section>
 
-    <section>
+    <section class="sec2d">
       <h2>Status</h2>
       <div class="stat"><span>Regime</span><span class="badge off" id="regime">idle</span></div>
       <div class="stat"><span>Rotor area</span><b id="rotorVal">&ndash;</b></div>
@@ -158,7 +185,7 @@
       <div class="stat"><span>FPS</span><b id="fpsVal">&ndash;</b></div>
     </section>
 
-    <section>
+    <section class="sec2d">
       <details>
         <summary>How it works</summary>
         <li>Domain is 40 &times; 24 ft; rulers show coordinates in feet.</li>
@@ -167,6 +194,91 @@
         <li>Colors map local wind speed in MPH (blue = slow, red = fast). Flow accelerates in constrictions (venturi effect).</li>
         <li>The rotor zone highlights cells with reversed (recirculating) flow behind objects; its total area is reported in ft&sup2;.</li>
         <li>When vortex shedding is detected the view shows an instantaneous single-frame field of direction &amp; strength arrows.</li>
+      </details>
+    </section>
+
+    <!-- ================= 3D mode panels ================= -->
+    <section class="sec3d">
+      <h2>3D Category</h2>
+      <div class="catbtns">
+        <button id="cat3Shapes" class="active">Free drawing</button>
+        <button id="cat3Terrain">Real terrain</button>
+      </div>
+      <div id="pal3wrap">
+        <div class="palette">
+          <div class="pal pal3d" data-obj="box" title="Add cube">
+            <svg width="30" height="30" viewBox="0 0 30 30"><path d="M8 11 L15 7 L22 11 L22 20 L15 24 L8 20 Z" fill="#3a465c" stroke="#8b96a8"/><path d="M8 11 L15 15 L22 11 M15 15 L15 24" fill="none" stroke="#8b96a8"/></svg>
+          </div>
+          <div class="pal pal3d" data-obj="sphere" title="Add ball">
+            <svg width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="10" fill="#3a465c" stroke="#8b96a8"/><ellipse cx="15" cy="15" rx="10" ry="3.5" fill="none" stroke="#8b96a8" opacity="0.7"/></svg>
+          </div>
+          <div class="pal pal3d" data-obj="cyl" title="Add cylinder">
+            <svg width="30" height="30" viewBox="0 0 30 30"><path d="M8 9 L8 21 A7 3 0 0 0 22 21 L22 9" fill="#3a465c" stroke="#8b96a8"/><ellipse cx="15" cy="9" rx="7" ry="3" fill="#3a465c" stroke="#8b96a8"/></svg>
+          </div>
+        </div>
+        <div class="hint">Tap a shape to add it. Click an object to select; drag moves it on the ground. Use the sliders to move / rotate / stretch (per-axis scale).</div>
+      </div>
+      <div id="terrWrap" style="display:none">
+        <div id="locRow">
+          <input id="locName" placeholder="e.g. Mussel Rock" value="Mussel Rock">
+          <button id="locGo">Load</button>
+        </div>
+        <div class="hint" id="terrStatus">Elevation: AWS/Mapzen terrain tiles &middot; geocoding: OpenStreetMap Nominatim (no API key needed).</div>
+      </div>
+    </section>
+
+    <section class="sec3d" id="xformSec" style="display:none">
+      <h2>Selected object</h2>
+      <div class="tgrid">
+        <span></span><span style="text-align:center">X</span><span style="text-align:center">Y</span><span style="text-align:center">Z</span>
+        <span>Move</span>
+        <input type="range" id="t3px" min="-18" max="18" step="0.1">
+        <input type="range" id="t3py" min="0.5" max="15" step="0.1">
+        <input type="range" id="t3pz" min="-12" max="12" step="0.1">
+        <span>Rotate</span>
+        <input type="range" id="t3rx" min="-180" max="180" step="1">
+        <input type="range" id="t3ry" min="-180" max="180" step="1">
+        <input type="range" id="t3rz" min="-180" max="180" step="1">
+        <span>Stretch</span>
+        <input type="range" id="t3sx" min="0.2" max="4" step="0.05">
+        <input type="range" id="t3sy" min="0.2" max="4" step="0.05">
+        <input type="range" id="t3sz" min="0.2" max="4" step="0.05">
+      </div>
+      <div class="btnrow" style="margin-top:8px"><button id="del3">&#128465; Delete object</button></div>
+    </section>
+
+    <section class="sec3d">
+      <h2>Wind (3D)</h2>
+      <div class="row"><label>Direction</label><span class="val" id="dir3Val">0&deg;</span></div>
+      <input type="range" id="dir3" min="0" max="359" value="0" style="width:100%">
+      <div class="row"><label>Speed</label><span class="val" id="spd3Val">10 MPH</span></div>
+      <input type="range" id="spd3" min="1" max="30" value="10" style="width:100%">
+    </section>
+
+    <section class="sec3d">
+      <div class="btnrow">
+        <button id="sim3Btn" class="primary">&#9654; Simulate 3D</button>
+        <button id="stop3Btn">&#9632; Stop</button>
+      </div>
+      <div class="hint">3D CFD (D3Q19 lattice-Boltzmann) cannot run in real time on a single machine at this resolution, so it is precomputed: the canvas locks while computing, then the recorded flow animation plays on a loop.</div>
+    </section>
+
+    <section class="sec3d">
+      <h2>3D Status</h2>
+      <div class="stat"><span>State</span><b id="st3state">idle</b></div>
+      <div class="stat"><span>Grid</span><b id="st3grid">&ndash;</b></div>
+      <div class="stat"><span>ms / step</span><b id="st3ms">&ndash;</b></div>
+      <div class="stat"><span>Real-time capable?</span><b id="st3rt">&ndash;</b></div>
+    </section>
+
+    <section class="sec3d">
+      <details>
+        <summary>Camera controls</summary>
+        <li>Drag = orbit (yaw / pitch)</li>
+        <li>Right-drag or two-finger drag = move (truck/pedestal)</li>
+        <li>Wheel / pinch = forward &amp; back (dolly)</li>
+        <li>Buttons: yaw, pitch, roll &plusmn;, dolly, &#8962; reset</li>
+        <li>Keys: W A S D move, R/F up/down, Q/E roll</li>
       </details>
     </section>
   </aside>
@@ -183,6 +295,27 @@
         <button id="shrinkBtn" title="Shrink shape">&minus;</button>
         <button id="growBtn" title="Enlarge shape">+</button>
         <button id="delBtn" title="Delete shape">&#128465;</button>
+      </div>
+    </div>
+    <div id="wrap3d">
+      <canvas id="cv3d"></canvas>
+      <div id="camCtl">
+        <button id="cYawL" title="Yaw left">&#8630;</button>
+        <button id="cPitchU" title="Pitch up">&#9650;</button>
+        <button id="cYawR" title="Yaw right">&#8631;</button>
+        <button id="cRollL" title="Roll left">&#10554;</button>
+        <button id="cHome" title="Reset camera">&#8962;</button>
+        <button id="cRollR" title="Roll right">&#10555;</button>
+        <button id="cIn" title="Move forward">+</button>
+        <button id="cPitchD" title="Pitch down">&#9660;</button>
+        <button id="cOut" title="Move back">&minus;</button>
+      </div>
+      <div id="ov3d">
+        <div id="ovMsg" style="font-weight:600">Computing 3D CFD&hellip;</div>
+        <div id="pbar"><div id="pfill"></div></div>
+        <div id="ovEta" class="hint" style="display:block"></div>
+        <div class="hint" style="display:block">Canvas is locked while computing &mdash; objects cannot be added or moved.</div>
+        <button id="ovCancel">Cancel</button>
       </div>
     </div>
     <div id="toast"></div>
@@ -776,6 +909,7 @@ let turbLevel = 0, fpsAcc = 0, fpsN = 0, lastT = performance.now();
 let stepsPF = STEPS_PER_FRAME;
 function frame(now) {
   requestAnimationFrame(frame);
+  if (document.body.classList.contains('mode-3d')) return;   // 2D paused while in 3D mode
   if (barrierDirty) { rasterize(); buildMesh(); }
   else if (Math.abs(meshZoom - zoom) > 0.01) buildMesh();
   if (running) {
@@ -1145,6 +1279,23 @@ updateStatus();
 new ResizeObserver(() => { layoutCanvas(); }).observe(cv);
 window.addEventListener('orientationchange', () => setTimeout(() => { layoutCanvas(); resetView(); }, 300));
 requestAnimationFrame(frame);
+
+/* ================= 2D / 3D mode switch ================= */
+window.APP_MODE = '2d';
+window.toast = toast;                          // shared with 3D module
+const m2Btn = document.getElementById('mode2d'), m3Btn = document.getElementById('mode3d');
+function setAppMode(m) {
+  window.APP_MODE = m;
+  document.body.classList.toggle('mode-3d', m === '3d');
+  m2Btn.classList.toggle('active', m === '2d');
+  m3Btn.classList.toggle('active', m === '3d');
+  if (m === '3d' && window.init3D) window.init3D();
+  if (m === '2d') layoutCanvas();
+}
+m2Btn.addEventListener('click', () => setAppMode('2d'));
+m3Btn.addEventListener('click', () => setAppMode('3d'));
 </script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="app3d.js"></script>
 </body>
 </html>
