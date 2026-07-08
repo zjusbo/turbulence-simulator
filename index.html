@@ -102,7 +102,12 @@
   .catbtns button{flex:1;}
   .catbtns button.active{background:#243147; border-color:var(--accent); color:var(--accent);}
   #locRow{display:flex; gap:6px;}
-  #locName{flex:1; background:var(--bg); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:7px 9px; font-size:13px; min-width:0;}
+  #locWrap{position:relative; flex:1; min-width:0;}
+  #locName{width:100%; background:var(--bg); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:7px 9px; font-size:13px;}
+  #locSug{position:absolute; top:calc(100% + 2px); left:0; right:0; background:var(--panel2); border:1px solid var(--border); border-radius:8px; z-index:70; max-height:190px; overflow-y:auto; display:none; box-shadow:0 8px 20px #0008;}
+  .sugitem{padding:7px 10px; font-size:12px; cursor:pointer; border-bottom:1px solid #232b3a;}
+  .sugitem:last-child{border-bottom:none;}
+  .sugitem:hover{background:#243147;}
 </style>
 </head>
 <body>
@@ -219,11 +224,22 @@
         <div class="hint">Tap a shape to add it. Click an object to select; drag moves it on the ground. Use the sliders to move / rotate / stretch (per-axis scale).</div>
       </div>
       <div id="terrWrap" style="display:none">
+        <div class="row"><label>Flying site</label>
+          <select id="siteSel" style="flex:2">
+            <option value="">Custom (search below)</option>
+            <option value="mussel">Mussel Rock, CA</option>
+            <option value="edlevin">Ed Levin Park, CA</option>
+          </select>
+        </div>
         <div id="locRow">
-          <input id="locName" placeholder="e.g. Mussel Rock" value="Mussel Rock">
+          <div id="locWrap">
+            <input id="locName" placeholder="e.g. Mussel Rock" value="Mussel Rock" autocomplete="off">
+            <div id="locSug"></div>
+          </div>
           <button id="locGo">Load</button>
         </div>
-        <div class="hint" id="terrStatus">Elevation: AWS/Mapzen terrain tiles &middot; geocoding: OpenStreetMap Nominatim (no API key needed).</div>
+        <div class="btnrow" style="margin-top:6px"><button id="liveWindBtn" title="Fetch current wind at this site (Open-Meteo)">&#8635; Use live wind</button></div>
+        <div class="hint" id="terrStatus">Google-Earth-style rendering: satellite imagery (Esri) draped over AWS/Mapzen elevation. Search has autocomplete (Photon/OSM). No API key needed.</div>
       </div>
     </section>
 
@@ -249,24 +265,47 @@
 
     <section class="sec3d">
       <h2>Wind (3D)</h2>
-      <div class="row"><label>Direction</label><span class="val" id="dir3Val">0&deg;</span></div>
+      <div class="row"><label>Direction</label><span class="val" id="dir3Val">from 270&deg; W</span></div>
       <input type="range" id="dir3" min="0" max="359" value="0" style="width:100%">
-      <div class="row"><label>Speed</label><span class="val" id="spd3Val">10 MPH</span></div>
-      <input type="range" id="spd3" min="1" max="30" value="10" style="width:100%">
+      <div class="row"><label>Speed (10 m AGL)</label><span class="val" id="spd3Val">12 MPH</span></div>
+      <input type="range" id="spd3" min="1" max="30" value="12" style="width:100%">
+      <div class="hint">A logarithmic wind-gradient profile is applied with altitude &mdash; winds aloft are stronger than the surface reading, just like on the hill.</div>
     </section>
 
     <section class="sec3d">
+      <h2>Pilot tools</h2>
+      <label class="chk"><input type="checkbox" id="showLift" checked> Lift band (green = soarable air)</label>
+      <div class="row"><label>Glider sink rate</label><span class="val" id="sinkVal">1.1 m/s</span></div>
+      <input type="range" id="sinkRate" min="0.6" max="1.6" value="1.1" step="0.05" style="width:100%">
+      <div class="row"><label>Cross-section at</label>
+        <select id="sliceSel" style="flex:2"><option value="-1">None</option></select>
+      </div>
+      <div class="hint">The lift band shows everywhere the air rises faster than your glider sinks. The cross-section slices the flow vertically through a launch, along the wind line.</div>
+      <div id="verdicts" class="hint" style="display:block; margin-top:6px"></div>
+    </section>
+
+    <section class="sec3d">
+      <div class="row"><label>Mesh granularity</label>
+        <select id="mesh3Res">
+          <option value="coarse">Coarse (fast)</option>
+          <option value="medium" selected>Medium</option>
+          <option value="fine">Fine (accurate)</option>
+        </select>
+      </div>
+      <div class="hint">Finer mesh = more accurate CFD result, but longer precompute. The wind-arrow mesh is adaptive: the more complex the terrain (or the closer to objects), the finer the arrows.</div>
       <div class="btnrow">
         <button id="sim3Btn" class="primary">&#9654; Simulate 3D</button>
         <button id="stop3Btn">&#9632; Stop</button>
       </div>
-      <div class="hint">3D CFD (D3Q19 lattice-Boltzmann) cannot run in real time on a single machine at this resolution, so it is precomputed: the canvas locks while computing, then the recorded flow animation plays on a loop.</div>
+      <div class="hint">3D CFD (D3Q19 lattice-Boltzmann) cannot run in real time on a single machine at this resolution, so it is precomputed: the canvas locks while computing, then the recorded wind-arrow animation plays on a loop. Magenta arrows mark the rotor (recirculation) area.</div>
     </section>
 
     <section class="sec3d">
       <h2>3D Status</h2>
       <div class="stat"><span>State</span><b id="st3state">idle</b></div>
       <div class="stat"><span>Grid</span><b id="st3grid">&ndash;</b></div>
+      <div class="stat"><span>Wind arrows</span><b id="st3arrows">&ndash;</b></div>
+      <div class="stat"><span>Rotor volume</span><b id="st3rotor">&ndash;</b></div>
       <div class="stat"><span>ms / step</span><b id="st3ms">&ndash;</b></div>
       <div class="stat"><span>Real-time capable?</span><b id="st3rt">&ndash;</b></div>
     </section>
@@ -1296,6 +1335,7 @@ m2Btn.addEventListener('click', () => setAppMode('2d'));
 m3Btn.addEventListener('click', () => setAppMode('3d'));
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/geotiff@2.1.3/dist-browser/geotiff.js"></script>
 <script src="app3d.js"></script>
 </body>
 </html>

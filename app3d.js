@@ -1,9 +1,14 @@
 "use strict";
 /* ============================================================
-   3D mode: Three.js scene + D3Q19 lattice-Boltzmann CFD.
-   The 3D solver is PRECOMPUTED (single-threaded JS cannot run
-   ~110k-cell D3Q19 in real time), then a recorded tracer-particle
-   animation plays on a loop. The canvas is locked during compute.
+   3D mode: Three.js + D3Q19 lattice-Boltzmann CFD (precomputed).
+   - Terrain: satellite imagery (Esri World Imagery) draped over
+     AWS/Mapzen elevation tiles -> Google-Earth-style rendering.
+     (Google's own Photorealistic 3D Tiles / Elevation APIs require
+     an API key + billing, so key-less open equivalents are used.)
+   - Location search: Photon (OSM) autocomplete, no key.
+   - Flow display: ADAPTIVE-MESH wind arrows (finer where terrain is
+     complex / near objects), animated from recorded CFD frames.
+     Magenta arrows = rotor (recirculating, reversed-flow) area.
    ============================================================ */
 (function () {
 const $ = id => document.getElementById(id);
@@ -13,21 +18,50 @@ const toast = msg => (window.toast ? window.toast(msg) : console.log(msg));
 let inited = false;
 let renderer, scene, camera, cv3, wrap3;
 let camPos, camQ, camHomePos, camHomeQ;
-let objects = [];                 // THREE.Mesh with userData.kind
+let objects = [];
 let selectedObj = null;
-let category = 'shapes';          // 'shapes' | 'terrain'
-let terra = null;                 // {n, hg, extentM, hRange, mesh, name}
+let category = 'shapes';
+let terra = null;                 // {n, hg, extentM, hRange, mesh, name, tex}
 let shapesGroup, terrainGroup, windArrow;
 
 /* compute / playback */
 let computing = false, cancelReq = false;
-let frames = [], playT = 0, playing = false;
-let pointsObj = null, pointsGeo = null;
-const P = 3000;                   // tracer particles
-let ppos = null, pspd = null;     // particle state (lattice units)
+let frames = [], rotorVols = [], playT = 0, playing = false;
+
+/* adaptive arrow field */
+let arrowPts = null;              // Float32Array(A*3) lattice coords
+let arrowLen = null;              // Float32Array(A) max length (lattice units)
+let A = 0;
+let lineObj = null, lineGeo = null;
+
+/* pilot tools */
+let liftObj = null, sliceObj = null, markersGroup = null;
+let FAC = null;                   // log wind-gradient factor per lattice level
+
+/* ---------- preset flying sites (paraglider/hang glider launches) ---------- */
+const SITES = {
+  mussel: { name: 'Mussel Rock, CA', lat: 37.67302, lon: -122.49418, markers: [
+    { name: 'LZ (dirt lot)',  lat: 37.669190670816974, lon: -122.49405521827042, kind: 'lz' },
+    { name: 'Walker launch',  lat: 37.67270434204596,  lon: -122.49368503332906, kind: 'launch' },
+    { name: 'Coyote launch',  lat: 37.671749417451814, lon: -122.49356699947602, kind: 'launch' },
+    { name: 'Soaring cliff',  lat: 37.6784365329671,   lon: -122.49539527331778, kind: 'poi' }
+  ]},
+  edlevin: { name: 'Ed Levin Park, CA', lat: 37.46393, lon: -121.86317, markers: [
+    { name: 'LZ',              lat: 37.458163624785364, lon: -121.86668950429737, kind: 'lz' },
+    { name: '1750 ft launch',  lat: 37.47530461981,     lon: -121.86087789291778, kind: 'launch' },
+    { name: '300 ft foothill', lat: 37.46107421138769,  lon: -121.86459985121138, kind: 'launch' },
+    { name: '600 ft foothill', lat: 37.46118788768288,  lon: -121.860526001938,   kind: 'launch' }
+  ]}
+};
+const DIRN = ['N','NE','E','SE','S','SW','W','NW'];
+function compassFrom(aDeg) {       // slider angle -> meteorological "wind from" degrees
+  const a = aDeg*Math.PI/180;
+  return (Math.atan2(-Math.cos(a), Math.sin(a))*180/Math.PI + 360) % 360;
+}
 
 /* ---------- free-drawing domain (feet) ---------- */
-const DX = 36, DY = 16, DZ = 24, CELL = 0.5;   // 72 x 32 x 48 lattice
+const DX = 36, DY = 16, DZ = 24;
+let CELL = 0.5;                   // ft per lattice cell (varies w/ granularity)
 
 /* ---------- D3Q19 ---------- */
 const CQ = [[0,0,0],
@@ -42,10 +76,18 @@ const TAU3 = 0.56, OM3 = 1/TAU3;
 let LX = 0, LY = 0, LZ = 0, N3 = 0;
 let f3 = [], g3 = [], solid3 = null;
 let VX = null, VY = null, VZ = null;
-let OFF = null;                   // per-direction index offsets
-let sceneScale = 1, sceneOffX = 0, sceneOffZ = 0;   // lattice -> scene units
+let OFF = null;
+let sceneScale = 1, sceneOffX = 0, sceneOffZ = 0;
 
-/* wind (3D controls) */
+/* mesh granularity presets */
+const GRAN = {
+  coarse: { sx: 56, sy: 24, sz: 36, tHoriz: 56, minW: 9 },
+  medium: { sx: 72, sy: 32, sz: 48, tHoriz: 72, minW: 6 },
+  fine:   { sx: 88, sy: 40, sz: 60, tHoriz: 96, minW: 4 }
+};
+const gran = () => GRAN[$('mesh3Res').value] || GRAN.medium;
+
+/* wind */
 const mph3 = () => parseFloat($('spd3').value);
 const u03 = () => 0.03 + (mph3()/30) * 0.07;
 function windVec3() {
@@ -53,19 +95,16 @@ function windVec3() {
   return [u*Math.cos(a), 0, u*Math.sin(a)];
 }
 
-/* color LUT (blue -> red by speed) */
+/* color LUT */
 const LUT3 = [];
 for (let i = 0; i < 32; i++) {
-  const t = i/31, h = 225*(1-t)/360;
-  const c = new (function(){ this.r=0;this.g=0;this.b=0; })();
-  // hsl to rgb (s=0.85, l=0.45+0.15t)
-  const s = 0.85, l = 0.45 + 0.15*t;
-  const a2 = s*Math.min(l,1-l);
-  const f2 = n => { const k=(n+h*12)%12; return l - a2*Math.max(-1,Math.min(k-3,9-k,1)); };
-  c.r = f2(0); c.g = f2(8); c.b = f2(4);
-  LUT3.push(c);
+  const t = i/31, h = 225*(1-t)/360, s = 0.85, l = 0.45 + 0.15*t;
+  const a2 = s*Math.min(l, 1-l);
+  const f2 = n => { const k = (n + h*12) % 12; return l - a2*Math.max(-1, Math.min(k-3, 9-k, 1)); };
+  LUT3.push({r: f2(0), g: f2(8), b: f2(4)});
 }
 const lut3 = t => LUT3[Math.max(0, Math.min(31, (t*31)|0))];
+const ROTOR_C = {r: 1.0, g: 0.30, b: 0.85};
 
 /* ============================================================
    Init & render loop
@@ -79,12 +118,12 @@ window.init3D = function () {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a0d12);
-  camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100000);
+  camera = new THREE.PerspectiveCamera(55, 1, 0.1, 200000);
   camPos = new THREE.Vector3(); camQ = new THREE.Quaternion();
   camHomePos = new THREE.Vector3(); camHomeQ = new THREE.Quaternion();
 
-  scene.add(new THREE.HemisphereLight(0x8899bb, 0x223344, 0.9));
-  const sun = new THREE.DirectionalLight(0xffeedd, 0.9);
+  scene.add(new THREE.HemisphereLight(0xbdc7d8, 0x30383f, 1.0));
+  const sun = new THREE.DirectionalLight(0xfff2dd, 0.8);
   sun.position.set(60, 100, 40);
   scene.add(sun);
 
@@ -112,12 +151,13 @@ function onResize() {
   camera.updateProjectionMatrix();
 }
 
-function loop3(now) {
+function loop3() {
   requestAnimationFrame(loop3);
   if (!document.body.classList.contains('mode-3d')) return;
   if (playing && frames.length) {
-    playT += 24/60;                            // ~24 recorded fps
-    applyFrame(frames[(playT|0) % frames.length]);
+    playT += 24/60;
+    const idx = (playT|0) % frames.length;
+    applyFrame(idx);
   }
   camera.position.copy(camPos);
   camera.quaternion.copy(camQ);
@@ -125,21 +165,19 @@ function loop3(now) {
 }
 
 /* ============================================================
-   Camera: pitch / roll / yaw / move
+   Camera
    ============================================================ */
 const _q = () => new THREE.Quaternion();
 function camYaw(a)   { camQ.premultiply(_q().setFromAxisAngle(new THREE.Vector3(0,1,0), a)); }
 function camPitch(a) { camQ.multiply(_q().setFromAxisAngle(new THREE.Vector3(1,0,0), a)); }
 function camRoll(a)  { camQ.multiply(_q().setFromAxisAngle(new THREE.Vector3(0,0,1), a)); }
-function camMove(dx, dy, dz) {
-  camPos.add(new THREE.Vector3(dx, dy, dz).applyQuaternion(camQ));
-}
+function camMove(dx, dy, dz) { camPos.add(new THREE.Vector3(dx, dy, dz).applyQuaternion(camQ)); }
 function moveStep() { return category === 'terrain' && terra ? terra.extentM/30 : 2.5; }
 function camGoHome(recompute) {
   if (recompute) {
     if (category === 'terrain' && terra) {
       const e = terra.extentM;
-      camera.position.set(e*0.65, terra.hRange + e*0.45, e*0.85);
+      camera.position.set(e*0.6, terra.hRange + e*0.4, e*0.8);
       camera.lookAt(0, terra.hRange*0.3, 0);
     } else {
       camera.position.set(DX*0.85, DY*1.3, DZ*1.7);
@@ -153,7 +191,7 @@ function camGoHome(recompute) {
 }
 
 /* ============================================================
-   Scene: free-drawing environment & objects
+   Free-drawing environment & objects
    ============================================================ */
 function buildShapesEnv() {
   const grid = new THREE.GridHelper(Math.max(DX, DZ), Math.max(DX, DZ)/2, 0x2a3242, 0x1d2431);
@@ -171,8 +209,8 @@ function buildShapesEnv() {
 }
 
 const OBJ_DEF = {
-  box:    { make: () => new THREE.BoxGeometry(4, 4, 4),           test: p => Math.abs(p.x)<=2 && Math.abs(p.y)<=2 && Math.abs(p.z)<=2 },
-  sphere: { make: () => new THREE.SphereGeometry(2, 24, 16),      test: p => p.lengthSq() <= 4 },
+  box:    { make: () => new THREE.BoxGeometry(4, 4, 4),              test: p => Math.abs(p.x)<=2 && Math.abs(p.y)<=2 && Math.abs(p.z)<=2 },
+  sphere: { make: () => new THREE.SphereGeometry(2, 24, 16),         test: p => p.lengthSq() <= 4 },
   cyl:    { make: () => new THREE.CylinderGeometry(1.5, 1.5, 5, 24), test: p => Math.abs(p.y)<=2.5 && (p.x*p.x + p.z*p.z) <= 2.25 }
 };
 function addObj3(kind) {
@@ -212,92 +250,284 @@ function applySliders() {
 }
 
 /* ============================================================
-   Terrain: geocode (Nominatim) + elevation (terrarium tiles)
+   Location autocomplete (Photon / OSM) + terrain loading
    ============================================================ */
-async function loadTerrain(name) {
+let sugTimer = null, chosenLoc = null;
+function bindAutocomplete() {
+  const inp = $('locName'), box = $('locSug');
+  const hide = () => { box.style.display = 'none'; };
+  inp.addEventListener('input', () => {
+    chosenLoc = null;
+    clearTimeout(sugTimer);
+    const q = inp.value.trim();
+    if (q.length < 3) { hide(); return; }
+    sugTimer = setTimeout(async () => {
+      try {
+        const r = await fetch('https://photon.komoot.io/api/?limit=6&q=' + encodeURIComponent(q));
+        const j = await r.json();
+        box.innerHTML = '';
+        if (!j.features || !j.features.length) { hide(); return; }
+        for (const ft of j.features) {
+          const p = ft.properties;
+          const label = [p.name, p.state || p.city, p.country].filter(Boolean).join(', ');
+          const div = document.createElement('div');
+          div.className = 'sugitem';
+          div.textContent = label;
+          div.addEventListener('pointerdown', e => {
+            e.preventDefault();
+            inp.value = label;
+            chosenLoc = { lat: ft.geometry.coordinates[1], lon: ft.geometry.coordinates[0], label: p.name || label };
+            hide();
+            loadTerrainAt(chosenLoc);
+          });
+          box.appendChild(div);
+        }
+        box.style.display = 'block';
+      } catch (e) { hide(); }
+    }, 350);
+  });
+  inp.addEventListener('blur', () => setTimeout(hide, 250));
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Escape') hide();
+    if (e.key === 'Enter') { hide(); $('locGo').click(); }
+  });
+}
+async function geocode(q) {
+  const r = await fetch('https://photon.komoot.io/api/?limit=1&q=' + encodeURIComponent(q));
+  const j = await r.json();
+  if (!j.features || !j.features.length) return null;
+  const ft = j.features[0];
+  return { lat: ft.geometry.coordinates[1], lon: ft.geometry.coordinates[0], label: ft.properties.name || q };
+}
+function loadSite(key) {
+  const s = SITES[key];
+  if (!s) return;
+  $('locName').value = s.name;
+  loadTerrainAt({ lat: s.lat, lon: s.lon, label: s.name, site: key });
+}
+async function loadTerrainAt(loc) {
   const st = $('terrStatus');
   try {
-    st.textContent = 'Geocoding "' + name + '"…';
-    const gr = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(name));
-    const gj = await gr.json();
-    if (!gj.length) { st.textContent = 'Location not found. Try another name.'; return; }
-    const lat = +gj[0].lat, lon = +gj[0].lon;
-    st.textContent = 'Fetching elevation tiles…';
-    const z = 14;
-    const n2 = Math.pow(2, z);
+    invalidate();
+    const { lat, lon, label } = loc;
+    $('siteSel').value = loc.site || '';
+    st.textContent = 'Fetching elevation…';
+    const z = 14, n2 = Math.pow(2, z);
     const xt = (lon + 180)/360 * n2;
     const yt = (1 - Math.log(Math.tan(lat*Math.PI/180) + 1/Math.cos(lat*Math.PI/180))/Math.PI)/2 * n2;
     const x0 = Math.max(0, Math.floor(xt - 1)), y0 = Math.max(0, Math.floor(yt - 1));
-    const cnv = document.createElement('canvas'); cnv.width = 512; cnv.height = 512;
-    const cctx = cnv.getContext('2d');
-    await Promise.all([0,1,2,3].map(i => new Promise((res, rej) => {
+    const loadImg = src => new Promise((res, rej) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
-      img.onload = () => { cctx.drawImage(img, (i%2)*256, (i>>1)*256); res(); };
-      img.onerror = () => rej(new Error('tile fetch failed'));
-      img.src = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x0 + i%2}/${y0 + (i>>1)}.png`;
-    })));
-    const px = cctx.getImageData(0, 0, 512, 512).data;
-    const elevAt = (ix, iy) => {
-      const o = (Math.min(511, iy)*512 + Math.min(511, ix))*4;
-      return (px[o]*256 + px[o+1] + px[o+2]/256) - 32768;
-    };
-    const n = 65;
-    const hg = new Float32Array(n*n);
-    let minE = 1e9, maxE = -1e9;
-    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
-      let e = elevAt(Math.round(i/(n-1)*511), Math.round(j/(n-1)*511));
-      if (e < 0) e = 0;                       // sea level floor
-      hg[j*n+i] = e;
-      minE = Math.min(minE, e); maxE = Math.max(maxE, e);
+      img.onload = () => res(img);
+      img.onerror = () => rej(new Error('tile failed'));
+      img.src = src;
+    });
+    /* --- elevation: prefer USGS 3DEP 1 m lidar (US, keyless), fall back to Mapzen terrarium (~10 m) --- */
+    const t2lon = xx => xx/n2*360 - 180;
+    const t2lat = yy => Math.atan(Math.sinh(Math.PI*(1 - 2*yy/n2)))*180/Math.PI;
+    let n, hg, demSrc;
+    try {
+      if (typeof GeoTIFF === 'undefined') throw new Error('geotiff lib not loaded');
+      n = 513;                                     // ~7.6 m grid from 1 m source
+      const url3dep = `https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage` +
+        `?bbox=${t2lon(x0)},${t2lat(y0+2)},${t2lon(x0+2)},${t2lat(y0)}&bboxSR=4326&imageSR=4326` +
+        `&size=${n},${n}&format=tiff&pixelType=F32&noDataInterpretation=esriNoDataMatchAny` +
+        `&interpolation=RSP_BilinearInterpolation&f=image`;
+      const buf = await (await fetch(url3dep)).arrayBuffer();
+      const tiff = await GeoTIFF.fromArrayBuffer(buf);
+      const im = await tiff.getImage();
+      const data = (await im.readRasters())[0];
+      if (im.getWidth() !== n || data.length < n*n) throw new Error('unexpected raster');
+      hg = new Float32Array(n*n);
+      let valid = 0;
+      for (let i = 0; i < n*n; i++) {
+        let e = data[i];
+        if (isFinite(e) && e > -100 && e < 9000) valid++; else e = 0;
+        hg[i] = Math.max(0, e);
+      }
+      if (valid < n*n*0.5) throw new Error('no 1 m lidar coverage here');
+      demSrc = 'USGS 3DEP 1 m lidar';
+    } catch (e3dep) {
+      /* terrarium fallback: 4x4 tiles @ z15 (max zoom) -> 1024px */
+      n = 257;
+      const ecnv = document.createElement('canvas'); ecnv.width = 1024; ecnv.height = 1024;
+      const ectx = ecnv.getContext('2d');
+      await Promise.all(Array.from({length: 16}, (_, i) => (async () => {
+        const xi = 2*x0 + (i%4), yi = 2*y0 + (i>>2);
+        const img = await loadImg(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z+1}/${xi}/${yi}.png`);
+        ectx.drawImage(img, (i%4)*256, (i>>2)*256);
+      })()));
+      const px = ectx.getImageData(0, 0, 1024, 1024).data;
+      const elevAt = (ix, iy) => {
+        const o = (Math.min(1023, iy)*1024 + Math.min(1023, ix))*4;
+        return (px[o]*256 + px[o+1] + px[o+2]/256) - 32768;
+      };
+      hg = new Float32Array(n*n);
+      for (let j = 0; j < n; j++) for (let i = 0; i < n; i++)
+        hg[j*n+i] = Math.max(0, elevAt(Math.round(i/(n-1)*1023), Math.round(j/(n-1)*1023)));
+      demSrc = 'Mapzen/AWS (~10 m)';
     }
+    let minE = 1e9, maxE = -1e9;
+    const sm = new Float32Array(n*n);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      let s = 0, c = 0;
+      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+        const jj = j+dj, ii = i+di;
+        if (jj < 0 || jj >= n || ii < 0 || ii >= n) continue;
+        s += hg[jj*n+ii]; c++;
+      }
+      sm[j*n+i] = s/c;
+    }
+    hg = sm;
+    for (let i = 0; i < n*n; i++) { minE = Math.min(minE, hg[i]); maxE = Math.max(maxE, hg[i]); }
     for (let i = 0; i < n*n; i++) hg[i] -= minE;
     const spanM = 40075016.686 * Math.cos(lat*Math.PI/180) / n2;
     const extentM = spanM * 2;
-    terra = { n, hg, extentM, hRange: Math.max(10, maxE - minE), name: gj[0].display_name.split(',')[0] };
+    /* satellite imagery 8x8 @ z16 -> 2048px (Esri World Imagery), per-tile fault tolerance */
+    st.textContent = 'Fetching satellite imagery…';
+    let tex = null;
+    try {
+      const icnv = document.createElement('canvas'); icnv.width = 2048; icnv.height = 2048;
+      const ictx = icnv.getContext('2d');
+      let failed = 0;
+      await Promise.all(Array.from({length: 64}, (_, i) => (async () => {
+        const xi = 4*x0 + (i%8), yi = 4*y0 + (i>>3);
+        try {
+          const img = await loadImg(`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z+2}/${yi}/${xi}`);
+          ictx.drawImage(img, (i%8)*256, (i>>3)*256);
+        } catch (e) {
+          failed++;
+          ictx.fillStyle = '#3a4048';
+          ictx.fillRect((i%8)*256, (i>>3)*256, 256, 256);
+        }
+      })()));
+      if (failed < 20) {
+        tex = new THREE.CanvasTexture(icnv);
+        if (renderer.capabilities.getMaxAnisotropy) tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      }
+    } catch (e) { tex = null; }   // fall back to elevation colors
+    terra = { n, hg, extentM, hRange: Math.max(10, maxE - minE), name: label, tex,
+              lat, lon, x0, y0, z, spanM, site: loc.site || null, markers: [] };
     buildTerrainMesh();
+    buildMarkers();
     camGoHome(true);
-    invalidate();
-    st.textContent = `${terra.name} · ${(extentM/1000).toFixed(1)} km × ${(extentM/1000).toFixed(1)} km · relief ${Math.round(terra.hRange)} m`;
+    setCategory('terrain');
+    st.textContent = `${label} · ${(extentM/1000).toFixed(1)} × ${(extentM/1000).toFixed(1)} km · relief ${Math.round(terra.hRange)} m · ${(extentM/(n-1)).toFixed(1)} m grid from ${demSrc}` +
+      (tex ? ' · imagery © Esri/Maxar' : ' · (imagery unavailable — elevation colors)');
   } catch (err) {
     st.textContent = 'Failed to load terrain (' + err.message + '). Check connection and try again.';
   }
 }
 function buildTerrainMesh() {
   while (terrainGroup.children.length) terrainGroup.remove(terrainGroup.children[0]);
-  const { n, hg, extentM, hRange } = terra;
-  const pos = new Float32Array(n*n*3), col = new Float32Array(n*n*3);
-  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
-    const k = j*n+i, h = hg[k];
-    pos[k*3]   = (i/(n-1) - 0.5)*extentM;
+  const { n, hg, extentM, hRange, tex } = terra;
+  /* render mesh at <=257 verts/side for perf; CFD + markers still use the full-res hg grid */
+  const step = Math.max(1, Math.round((n-1)/256));
+  const m = (n-1)/step + 1;
+  const pos = new Float32Array(m*m*3), col = new Float32Array(m*m*3), uv = new Float32Array(m*m*2);
+  for (let j = 0; j < m; j++) for (let i = 0; i < m; i++) {
+    const k = j*m+i, h = hg[(j*step)*n + i*step];
+    pos[k*3]   = (i/(m-1) - 0.5)*extentM;
     pos[k*3+1] = h;
-    pos[k*3+2] = (j/(n-1) - 0.5)*extentM;
+    pos[k*3+2] = (j/(m-1) - 0.5)*extentM;
+    uv[k*2] = i/(m-1); uv[k*2+1] = 1 - j/(m-1);
     const t = h/hRange;
     let r, g2, b;
-    if (h < 0.5) { r=0.10; g2=0.30; b=0.55; }                       // water/beach
-    else if (t < 0.5) { const u=t*2;   r=0.16+0.24*u; g2=0.38-0.05*u; b=0.16+0.06*u; }
+    if (h < 0.5) { r=0.10; g2=0.30; b=0.55; }
+    else if (t < 0.5) { const u=t*2;     r=0.16+0.24*u; g2=0.38-0.05*u; b=0.16+0.06*u; }
     else              { const u=(t-0.5)*2; r=0.40+0.5*u; g2=0.33+0.55*u; b=0.22+0.7*u; }
     col[k*3]=r; col[k*3+1]=g2; col[k*3+2]=b;
   }
   const idx = [];
-  for (let j = 0; j < n-1; j++) for (let i = 0; i < n-1; i++) {
-    const a=j*n+i, b=a+1, c=a+n, d=c+1;
+  for (let j = 0; j < m-1; j++) for (let i = 0; i < m-1; i++) {
+    const a=j*m+i, b=a+1, c=a+m, d=c+1;
     idx.push(a,c,b, b,c,d);
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  terra.mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({vertexColors: true, side: THREE.DoubleSide}));
+  const mat = tex
+    ? new THREE.MeshLambertMaterial({map: tex})
+    : new THREE.MeshLambertMaterial({vertexColors: true, side: THREE.DoubleSide});
+  terra.mesh = new THREE.Mesh(geo, mat);
   terrainGroup.add(terra.mesh);
 }
-function terrainHeight(wx, wz) {               // world meters -> height above base
+function terrainHeight(wx, wz) {
   const { n, hg, extentM } = terra;
   let gx = (wx/extentM + 0.5)*(n-1), gz = (wz/extentM + 0.5)*(n-1);
   gx = Math.max(0, Math.min(n-1.001, gx)); gz = Math.max(0, Math.min(n-1.001, gz));
   const i = gx|0, j = gz|0, fx = gx-i, fz = gz-j;
   return hg[j*n+i]*(1-fx)*(1-fz) + hg[j*n+i+1]*fx*(1-fz) + hg[(j+1)*n+i]*(1-fx)*fz + hg[(j+1)*n+i+1]*fx*fz;
+}
+
+/* ---------- site markers (LZ / launches) ---------- */
+function ll2scene(lat, lon) {
+  const n2 = Math.pow(2, terra.z);
+  const xt = (lon + 180)/360 * n2;
+  const yt = (1 - Math.log(Math.tan(lat*Math.PI/180) + 1/Math.cos(lat*Math.PI/180))/Math.PI)/2 * n2;
+  return { x: (xt - (terra.x0 + 1))*terra.spanM, z: (yt - (terra.y0 + 1))*terra.spanM };
+}
+function makeLabel(text, color) {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+  const x = c.getContext('2d');
+  x.font = 'bold 52px sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.strokeStyle = 'rgba(0,0,0,0.85)'; x.lineWidth = 10; x.strokeText(text, 256, 64);
+  x.fillStyle = '#' + color.toString(16).padStart(6, '0'); x.fillText(text, 256, 64);
+  const t = new THREE.CanvasTexture(c);
+  return new THREE.Sprite(new THREE.SpriteMaterial({map: t, transparent: true, depthTest: false}));
+}
+function buildMarkers() {
+  if (markersGroup) terrainGroup.remove(markersGroup);
+  markersGroup = new THREE.Group();
+  terrainGroup.add(markersGroup);
+  terra.markers = [];
+  const sel = $('sliceSel');
+  sel.innerHTML = '<option value="-1">None</option>';
+  if (!terra.site || !SITES[terra.site]) return;
+  const e = terra.extentM;
+  for (const d of SITES[terra.site].markers) {
+    const p = ll2scene(d.lat, d.lon);
+    if (Math.abs(p.x) > e/2 || Math.abs(p.z) > e/2) continue;
+    const y = terrainHeight(p.x, p.z);
+    const col = d.kind === 'lz' ? 0x39d353 : d.kind === 'launch' ? 0xffa657 : 0x4da3ff;
+    const poleH = e*0.02;
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(e*0.0012, e*0.0012, poleH, 6),
+      new THREE.MeshBasicMaterial({color: col})
+    );
+    pole.position.set(p.x, y + poleH/2, p.z);
+    markersGroup.add(pole);
+    const spr = makeLabel(d.name, col);
+    spr.position.set(p.x, y + poleH*1.3, p.z);
+    spr.scale.set(e*0.12, e*0.03, 1);
+    markersGroup.add(spr);
+    terra.markers.push({ name: d.name, kind: d.kind, x: p.x, z: p.z, y });
+    const o = document.createElement('option');
+    o.value = String(terra.markers.length - 1);
+    o.textContent = d.name;
+    sel.appendChild(o);
+  }
+  const li = terra.markers.findIndex(m => m.kind === 'launch');
+  if (li >= 0) sel.value = String(li);
+}
+/* ---------- live wind (Open-Meteo, keyless) ---------- */
+async function liveWind() {
+  if (!terra || terra.lat === undefined) { toast('Load a terrain / site first.'); return; }
+  try {
+    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${terra.lat}&longitude=${terra.lon}&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=mph`);
+    const j = await r.json();
+    const c = j.current;
+    $('spd3').value = Math.max(1, Math.min(30, Math.round(c.wind_speed_10m)));
+    const D = c.wind_direction_10m*Math.PI/180;
+    $('dir3').value = Math.round((Math.atan2(Math.cos(D), -Math.sin(D))*180/Math.PI + 360) % 360);
+    $('dir3').dispatchEvent(new Event('input'));
+    $('spd3').dispatchEvent(new Event('input'));
+    toast(`Live wind: ${Math.round(c.wind_speed_10m)} mph, gusting ${Math.round(c.wind_gusts_10m)}, from ${Math.round(c.wind_direction_10m)}° ${DIRN[Math.round(c.wind_direction_10m/45) % 8]}`, 4000);
+  } catch (e) { toast('Live wind unavailable (' + e.message + ')'); }
 }
 
 /* ============================================================
@@ -329,28 +559,38 @@ function buildSolid() {
       solid3[x + LX*(0 + LY*z)] = 1;
     }
   } else {
-    for (let z = 0; z < LZ; z++) for (let x = 0; x < LX; x++) solid3[x + LX*(0 + LY*z)] = 1;  // ground
+    for (let z = 0; z < LZ; z++) for (let x = 0; x < LX; x++) solid3[x + LX*(0 + LY*z)] = 1;
     const v = new THREE.Vector3();
     const invs = objects.map(m => {
       m.updateMatrixWorld(true);
       return { inv: new THREE.Matrix4().copy(m.matrixWorld).invert(), test: OBJ_DEF[m.userData.kind].test };
     });
-    for (let z = 1; z < LZ-1; z++) for (let y = 1; y < LY-1; y++) for (let x = 1; x < LX-1; x++) {
-      const wx = (x+0.5)*CELL - DX/2, wy = (y+0.5)*CELL, wz = (z+0.5)*CELL - DZ/2;
-      for (const o of invs) {
-        v.set(wx, wy, wz).applyMatrix4(o.inv);
-        if (o.test(v)) { solid3[x + LX*(y + LY*z)] = 1; break; }
+    if (invs.length) {
+      for (let z = 1; z < LZ-1; z++) for (let y = 1; y < LY-1; y++) for (let x = 1; x < LX-1; x++) {
+        const wx = (x+0.5)*CELL - DX/2, wy = (y+0.5)*CELL, wz = (z+0.5)*CELL - DZ/2;
+        for (const o of invs) {
+          v.set(wx, wy, wz).applyMatrix4(o.inv);
+          if (o.test(v)) { solid3[x + LX*(y + LY*z)] = 1; break; }
+        }
       }
     }
   }
 }
 function initFluid3() {
-  const [ux, uy, uz] = windVec3();
-  for (let i = 0; i < N3; i++) { setEq3(f3, i, 1, ux, uy, uz); VX[i] = ux; VY[i] = uy; VZ[i] = uz; }
+  const [u0x, , u0z] = windVec3();
+  for (let z = 0; z < LZ; z++) for (let y = 0; y < LY; y++) {
+    const fy = FAC ? FAC[y] : 1;
+    const ux = u0x*fy, uz = u0z*fy;
+    const row = LX*(y + LY*z);
+    for (let x = 0; x < LX; x++) {
+      const i = row + x;
+      setEq3(f3, i, 1, ux, 0, uz);
+      VX[i] = ux; VY[i] = 0; VZ[i] = uz;
+    }
+  }
 }
 function lbm3Step() {
   const [u0x, u0y, u0z] = windVec3();
-  /* stream (pull) with bounce-back */
   for (let z = 1; z < LZ-1; z++) {
     for (let y = 1; y < LY-1; y++) {
       const row = LX*(y + LY*z);
@@ -364,7 +604,6 @@ function lbm3Step() {
       }
     }
   }
-  /* collide (BGK) */
   for (let z = 1; z < LZ-1; z++) {
     for (let y = 1; y < LY-1; y++) {
       const row = LX*(y + LY*z);
@@ -390,20 +629,24 @@ function lbm3Step() {
       }
     }
   }
-  /* boundary faces: equilibrium free-stream (x/z sides + top) */
   for (let z = 0; z < LZ; z++) for (let y = 0; y < LY; y++) {
+    const fy = FAC ? FAC[y] : 1, ux = u0x*fy, uz = u0z*fy;
     const a = 0 + LX*(y + LY*z), b = (LX-1) + LX*(y + LY*z);
-    if (!solid3[a]) { setEq3(g3, a, 1, u0x, u0y, u0z); VX[a]=u0x; VY[a]=u0y; VZ[a]=u0z; }
-    if (!solid3[b]) { setEq3(g3, b, 1, u0x, u0y, u0z); VX[b]=u0x; VY[b]=u0y; VZ[b]=u0z; }
+    if (!solid3[a]) { setEq3(g3, a, 1, ux, 0, uz); VX[a]=ux; VY[a]=0; VZ[a]=uz; }
+    if (!solid3[b]) { setEq3(g3, b, 1, ux, 0, uz); VX[b]=ux; VY[b]=0; VZ[b]=uz; }
   }
   for (let x = 0; x < LX; x++) for (let y = 0; y < LY; y++) {
+    const fy = FAC ? FAC[y] : 1, ux = u0x*fy, uz = u0z*fy;
     const a = x + LX*(y + 0), b = x + LX*(y + LY*(LZ-1));
-    if (!solid3[a]) { setEq3(g3, a, 1, u0x, u0y, u0z); VX[a]=u0x; VY[a]=u0y; VZ[a]=u0z; }
-    if (!solid3[b]) { setEq3(g3, b, 1, u0x, u0y, u0z); VX[b]=u0x; VY[b]=u0y; VZ[b]=u0z; }
+    if (!solid3[a]) { setEq3(g3, a, 1, ux, 0, uz); VX[a]=ux; VY[a]=0; VZ[a]=uz; }
+    if (!solid3[b]) { setEq3(g3, b, 1, ux, 0, uz); VX[b]=ux; VY[b]=0; VZ[b]=uz; }
   }
-  for (let x = 0; x < LX; x++) for (let z = 0; z < LZ; z++) {
-    const a = x + LX*((LY-1) + LY*z);
-    if (!solid3[a]) { setEq3(g3, a, 1, u0x, u0y, u0z); VX[a]=u0x; VY[a]=u0y; VZ[a]=u0z; }
+  {
+    const fy = FAC ? FAC[LY-1] : 1, ux = u0x*fy, uz = u0z*fy;
+    for (let x = 0; x < LX; x++) for (let z = 0; z < LZ; z++) {
+      const a = x + LX*((LY-1) + LY*z);
+      if (!solid3[a]) { setEq3(g3, a, 1, ux, 0, uz); VX[a]=ux; VY[a]=0; VZ[a]=uz; }
+    }
   }
   const t = f3; f3 = g3; g3 = t;
 }
@@ -420,73 +663,255 @@ function sampleV3(x, y, z, out) {
 }
 
 /* ============================================================
-   Tracer particles & recorded animation
+   Adaptive arrow mesh (quadtree: finer where terrain is complex
+   or near objects), animated from recorded velocity frames
    ============================================================ */
-function seedParticle(i) {
-  const [ux,,uz] = windVec3();
-  if (Math.abs(ux) >= Math.abs(uz)) {
-    ppos[i*3]   = ux > 0 ? 1.5 + Math.random()*2 : LX - 3.5 + Math.random()*2;
-    ppos[i*3+1] = 1 + Math.random()*(LY-3);
-    ppos[i*3+2] = 1 + Math.random()*(LZ-3);
-  } else {
-    ppos[i*3]   = 1 + Math.random()*(LX-3);
-    ppos[i*3+1] = 1 + Math.random()*(LY-3);
-    ppos[i*3+2] = uz > 0 ? 1.5 + Math.random()*2 : LZ - 3.5 + Math.random()*2;
+function buildArrowField() {
+  const pts = [], lens = [];
+  const minW = gran().minW;
+  const cellM = category === 'terrain' && terra ? terra.extentM/LX : CELL;
+  /* complexity test for a horizontal cell [x..x+w) x [z..z+w) */
+  const complex = (x, z, w) => {
+    if (category === 'terrain' && terra) {
+      let hmin = 1e9, hmax = -1e9;
+      for (let j = 0; j <= 2; j++) for (let i = 0; i <= 2; i++) {
+        const h = terrainHeight((x + w*i/2 - LX/2)*cellM, (z + w*j/2 - LZ/2)*cellM);
+        hmin = Math.min(hmin, h); hmax = Math.max(hmax, h);
+      }
+      return (hmax - hmin) > 0.22 * w * cellM;          // steep relief -> refine
+    }
+    /* shapes: refine near object bounding boxes */
+    const bb = new THREE.Box3();
+    for (const m of objects) {
+      bb.setFromObject(m);
+      const x0 = (bb.min.x + DX/2)/CELL - 2, x1 = (bb.max.x + DX/2)/CELL + 2;
+      const z0 = (bb.min.z + DZ/2)/CELL - 2, z1 = (bb.max.z + DZ/2)/CELL + 2;
+      if (x + w > x0 && x < x1 && z + w > z0 && z < z1) return true;
+    }
+    return false;
+  };
+  const leaf = (x, z, w) => {
+    const cx2 = x + w/2, cz2 = z + w/2;
+    let surf = 1;                                        // lattice y of local surface
+    if (category === 'terrain' && terra)
+      surf = Math.min(LY-3, terrainHeight((cx2 - LX/2)*cellM, (cz2 - LZ/2)*cellM)/cellM);
+    const room = LY - 1.5 - surf;
+    const levels = [surf + Math.max(1.2, room*0.08), surf + room*0.35, surf + room*0.68];
+    for (const ly of levels) {
+      const ii = (cx2|0) + LX*((ly|0) + LY*(cz2|0));
+      if (solid3[ii]) continue;
+      pts.push(cx2, ly, cz2);
+      lens.push(Math.min(w, 12)*0.62);
+    }
+  };
+  const rec = (x, z, w, depth) => {
+    if ((depth < 3) || (w > minW && depth < 7 && complex(x, z, w))) {
+      const h = w/2;
+      rec(x, z, h, depth+1);     rec(x+h, z, h, depth+1);
+      rec(x, z+h, h, depth+1);   rec(x+h, z+h, h, depth+1);
+    } else leaf(x, z, w);
+  };
+  const size = Math.max(LX, LZ);
+  rec(0, 0, size, 0);
+  /* drop leaves outside the domain (size may exceed LZ) */
+  const fp = [], fl = [];
+  for (let i = 0; i < lens.length; i++) {
+    const x = pts[i*3], z = pts[i*3+2];
+    if (x >= 1 && x <= LX-1 && z >= 1 && z <= LZ-1) { fp.push(pts[i*3], pts[i*3+1], pts[i*3+2]); fl.push(lens[i]); }
   }
+  arrowPts = new Float32Array(fp);
+  arrowLen = new Float32Array(fl);
+  A = fl.length;
+  $('st3arrows').textContent = A.toLocaleString();
 }
-function initParticles() {
-  ppos = new Float32Array(P*3); pspd = new Float32Array(P);
-  for (let i = 0; i < P; i++) {
-    if (Math.random() < 0.35) {               // some seeded mid-domain for instant structure
-      ppos[i*3] = 1 + Math.random()*(LX-3);
-      ppos[i*3+1] = 1 + Math.random()*(LY-3);
-      ppos[i*3+2] = 1 + Math.random()*(LZ-3);
-    } else seedParticle(i);
-  }
-}
-function advect() {
-  const v = [0,0,0];
-  const k = 0.9/u03();
-  for (let i = 0; i < P; i++) {
-    let x = ppos[i*3], y = ppos[i*3+1], z = ppos[i*3+2];
-    sampleV3(x, y, z, v);
-    x += v[0]*k; y += v[1]*k; z += v[2]*k;
-    const ii = (x|0) + LX*((y|0) + LY*(z|0));
-    if (x < 1 || x > LX-2 || y < 1 || y > LY-2 || z < 1 || z > LZ-2 || solid3[ii]) { seedParticle(i); pspd[i] = 1; continue; }
-    ppos[i*3]=x; ppos[i*3+1]=y; ppos[i*3+2]=z;
-    pspd[i] = Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]) / u03();
-  }
+function ensureArrowObject() {
+  if (lineObj) { scene.remove(lineObj); lineGeo.dispose(); lineObj.material.dispose(); }
+  lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(A*6*3), 3));
+  lineGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(A*6*3), 3));
+  lineObj = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({vertexColors: true}));
+  lineObj.frustumCulled = false;
+  scene.add(lineObj);
 }
 function recordFrame() {
-  const fr = new Float32Array(P*4);
-  for (let i = 0; i < P; i++) {
-    fr[i*4]   = ppos[i*3]  *sceneScale + sceneOffX;
-    fr[i*4+1] = ppos[i*3+1]*sceneScale;
-    fr[i*4+2] = ppos[i*3+2]*sceneScale + sceneOffZ;
-    fr[i*4+3] = pspd[i];
+  const fr = new Float32Array(A*4);
+  const v = [0,0,0];
+  for (let i = 0; i < A; i++) {
+    sampleV3(arrowPts[i*3], arrowPts[i*3+1], arrowPts[i*3+2], v);
+    fr[i*4] = v[0]; fr[i*4+1] = v[1]; fr[i*4+2] = v[2];
+    fr[i*4+3] = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]) / u03();
   }
   frames.push(fr);
-  applyFrame(fr);                              // live preview while computing
-}
-function ensurePoints() {
-  if (pointsObj) { scene.remove(pointsObj); pointsGeo.dispose(); pointsObj.material.dispose(); }
-  pointsGeo = new THREE.BufferGeometry();
-  pointsGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(P*3), 3));
-  pointsGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(P*3), 3));
-  const size = category === 'terrain' && terra ? terra.extentM/LX*0.9 : 0.3;
-  pointsObj = new THREE.Points(pointsGeo, new THREE.PointsMaterial({size, vertexColors: true, transparent: true, opacity: 0.95}));
-  scene.add(pointsObj);
-}
-function applyFrame(fr) {
-  if (!pointsGeo) return;
-  const pa = pointsGeo.attributes.position.array, ca = pointsGeo.attributes.color.array;
-  for (let i = 0; i < P; i++) {
-    pa[i*3] = fr[i*4]; pa[i*3+1] = fr[i*4+1]; pa[i*3+2] = fr[i*4+2];
-    const c = lut3(Math.min(1, fr[i*4+3]/1.6));
-    ca[i*3] = c.r; ca[i*3+1] = c.g; ca[i*3+2] = c.b;
+  /* rotor volume: count reversed-flow fluid cells */
+  const [wx,,wz] = windVec3();
+  const wm = Math.hypot(wx, wz), wnx = wx/wm, wnz = wz/wm, thr = -0.03*wm;
+  let cnt = 0;
+  for (let i = 0; i < N3; i++) {
+    if (!solid3[i] && (VX[i]*wnx + VZ[i]*wnz) < thr) cnt++;
   }
-  pointsGeo.attributes.position.needsUpdate = true;
-  pointsGeo.attributes.color.needsUpdate = true;
+  const cellL = category === 'terrain' && terra ? terra.extentM/LX : CELL;
+  rotorVols.push(cnt * cellL*cellL*cellL);
+  applyFrame(frames.length - 1);               // live preview
+}
+function fmtVol(v) {
+  const unit = category === 'terrain' ? 'm³' : 'ft³';
+  if (v >= 1e6) return (v/1e6).toFixed(2) + 'M ' + unit;
+  if (v >= 1e3) return (v/1e3).toFixed(1) + 'k ' + unit;
+  return Math.round(v) + ' ' + unit;
+}
+function applyFrame(idx) {
+  if (!lineGeo || !frames[idx]) return;
+  const fr = frames[idx];
+  const pa = lineGeo.attributes.position.array, ca = lineGeo.attributes.color.array;
+  const [wx,,wz] = windVec3();
+  const wm = Math.hypot(wx, wz), wnx = wx/wm, wnz = wz/wm, thr = -0.03*wm;
+  for (let i = 0; i < A; i++) {
+    const vx = fr[i*4], vy = fr[i*4+1], vz = fr[i*4+2], t = fr[i*4+3];
+    const sp = Math.sqrt(vx*vx + vy*vy + vz*vz);
+    const bx = arrowPts[i*3]*sceneScale + sceneOffX;
+    const by = arrowPts[i*3+1]*sceneScale;
+    const bz = arrowPts[i*3+2]*sceneScale + sceneOffZ;
+    let o = i*18;
+    if (sp < 1e-6) { for (let k = 0; k < 18; k++) pa[o+k] = 0; continue; }
+    const dx = vx/sp, dy = vy/sp, dz = vz/sp;
+    const len = arrowLen[i]*(0.35 + 0.65*Math.min(1, t/1.6)) * sceneScale;
+    const tx = bx + dx*len, ty = by + dy*len, tz = bz + dz*len;
+    /* head basis: perpendicular to dir */
+    let hx = -dz, hy = 0, hz = dx;
+    const hm = Math.hypot(hx, hz) || 1;
+    hx /= hm; hz /= hm;
+    const hl = len*0.32;
+    pa[o]   = bx; pa[o+1] = by; pa[o+2] = bz;
+    pa[o+3] = tx; pa[o+4] = ty; pa[o+5] = tz;
+    pa[o+6] = tx; pa[o+7] = ty; pa[o+8] = tz;
+    pa[o+9] = tx - dx*hl + hx*hl*0.55; pa[o+10] = ty - dy*hl; pa[o+11] = tz - dz*hl + hz*hl*0.55;
+    pa[o+12] = tx; pa[o+13] = ty; pa[o+14] = tz;
+    pa[o+15] = tx - dx*hl - hx*hl*0.55; pa[o+16] = ty - dy*hl; pa[o+17] = tz - dz*hl - hz*hl*0.55;
+    const rotor = (vx*wnx + vz*wnz) < thr;
+    const c = rotor ? ROTOR_C : lut3(Math.min(1, t/1.6));
+    for (let k = 0; k < 6; k++) { ca[o + k*3] = c.r; ca[o + k*3 + 1] = c.g; ca[o + k*3 + 2] = c.b; }
+  }
+  lineGeo.attributes.position.needsUpdate = true;
+  lineGeo.attributes.color.needsUpdate = true;
+  if (rotorVols[idx] !== undefined) $('st3rotor').textContent = fmtVol(rotorVols[idx]);
+}
+
+/* ============================================================
+   Pilot tools: lift band, cross-section slice, launch verdicts
+   ============================================================ */
+function clearObj(o) {
+  if (!o) return;
+  scene.remove(o);
+  if (o.geometry) o.geometry.dispose();
+  if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+}
+const sinkThr = () => parseFloat($('sinkRate').value);
+const vRefMs = () => mph3()*0.44704;                 // slider mph -> m/s (or ft-domain equivalent)
+/* green cloud of every cell where updraft >= glider sink rate */
+function buildLiftBand() {
+  clearObj(liftObj); liftObj = null;
+  if (!frames.length || !VY) return;
+  const Vref = vRefMs(), u0 = u03(), thr = sinkThr();
+  const pts = [];
+  for (let z = 1; z < LZ-1; z++) for (let y = 1; y < LY-1; y++) {
+    const row = LX*(y + LY*z);
+    for (let x = 1; x < LX-1; x++) {
+      const i = row + x;
+      if (solid3[i]) continue;
+      if (VY[i]/u0*Vref >= thr)
+        pts.push((x+0.5)*sceneScale + sceneOffX, (y+0.5)*sceneScale, (z+0.5)*sceneScale + sceneOffZ);
+    }
+  }
+  if (!pts.length) return;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
+  liftObj = new THREE.Points(g, new THREE.PointsMaterial({
+    color: 0x37e08a, size: sceneScale*0.95, transparent: true, opacity: 0.32, depthWrite: false
+  }));
+  liftObj.visible = $('showLift').checked;
+  scene.add(liftObj);
+}
+/* vertical slice through a launch, along the wind line (textbook lift-band diagram) */
+function buildSlice() {
+  clearObj(sliceObj); sliceObj = null;
+  const sel = +$('sliceSel').value;
+  if (sel < 0 || !frames.length || category !== 'terrain' || !terra || !terra.markers[sel]) return;
+  const m = terra.markers[sel];
+  const a = parseFloat($('dir3').value)*Math.PI/180, ca = Math.cos(a), sa = Math.sin(a);
+  const Vref = vRefMs(), u0 = u03(), thr = sinkThr();
+  const cellM = terra.extentM/LX;
+  const W2 = 256, H2 = 96;
+  const c = document.createElement('canvas'); c.width = W2; c.height = H2;
+  const x2 = c.getContext('2d');
+  const img = x2.createImageData(W2, H2);
+  const planeLen = terra.extentM, planeH = LY*cellM;
+  const v = [0,0,0];
+  for (let py = 0; py < H2; py++) for (let px2 = 0; px2 < W2; px2++) {
+    const s = (px2/(W2-1) - 0.5)*planeLen;
+    const wxp = m.x + ca*s, wzp = m.z + sa*s;
+    const ym = (1 - py/(H2-1))*planeH;
+    const lxr = (wxp + terra.extentM/2)/cellM, lzr = (wzp + terra.extentM/2)/cellM, lyr = ym/cellM;
+    const o = (py*W2 + px2)*4;
+    if (lxr < 1 || lxr >= LX-1 || lzr < 1 || lzr >= LZ-1 || lyr >= LY-1) { img.data[o+3] = 0; continue; }
+    const ii = (lxr|0) + LX*((lyr|0) + LY*(lzr|0));
+    if (solid3[ii]) { img.data[o]=20; img.data[o+1]=24; img.data[o+2]=32; img.data[o+3]=235; continue; }
+    sampleV3(lxr, lyr, lzr, v);
+    const w = v[1]/u0*Vref;
+    if (w >= thr)        { img.data[o]=40;  img.data[o+1]=225; img.data[o+2]=120; img.data[o+3]=190; }
+    else if (w > 0.15)   { img.data[o]=60;  img.data[o+1]=140; img.data[o+2]=90;  img.data[o+3]=130; }
+    else if (w < -thr)   { img.data[o]=70;  img.data[o+1]=90;  img.data[o+2]=230; img.data[o+3]=170; }
+    else if (w < -0.15)  { img.data[o]=70;  img.data[o+1]=90;  img.data[o+2]=180; img.data[o+3]=105; }
+    else                 { img.data[o]=150; img.data[o+1]=150; img.data[o+2]=150; img.data[o+3]=40;  }
+  }
+  x2.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.magFilter = THREE.LinearFilter;
+  sliceObj = new THREE.Mesh(
+    new THREE.PlaneGeometry(planeLen, planeH),
+    new THREE.MeshBasicMaterial({map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false})
+  );
+  sliceObj.position.set(m.x, planeH/2, m.z);
+  sliceObj.rotation.y = -a;
+  scene.add(sliceObj);
+}
+/* per-launch go/no-go assessment */
+function updateVerdicts() {
+  const el = $('verdicts');
+  if (!frames.length || category !== 'terrain' || !terra || !terra.markers.length) { el.innerHTML = ''; return; }
+  const Vref = vRefMs(), u0 = u03(), thr = sinkThr();
+  const cellM = terra.extentM/LX;
+  const [wx,, wz] = windVec3();
+  const wm = Math.hypot(wx, wz), wnx = wx/wm, wnz = wz/wm;
+  let html = '<b style="color:#dbe2ee">Launch assessment</b><br>';
+  for (const m of terra.markers) {
+    const lx = Math.round((m.x + terra.extentM/2)/cellM), lz = Math.round((m.z + terra.extentM/2)/cellM);
+    if (lx < 1 || lx >= LX-1 || lz < 1 || lz >= LZ-1) continue;
+    let surf = 1;
+    for (let y = 1; y < LY-1; y++) if (!solid3[lx + LX*(y + LY*lz)]) { surf = y; break; }
+    let maxW = -99, top = -1;
+    for (let y = surf; y < LY-1; y++) {
+      const w = VY[lx + LX*(y + LY*lz)]/u0*Vref;
+      if (w > maxW) maxW = w;
+      if (w >= thr) top = y;
+    }
+    const iw = lx + LX*(Math.min(LY-2, surf+1) + LY*lz);
+    const wind = Math.sqrt(VX[iw]*VX[iw] + VY[iw]*VY[iw] + VZ[iw]*VZ[iw])/u0*mph3();
+    let rotor = false;
+    for (let dz2 = -2; dz2 <= 2 && !rotor; dz2++) for (let dx2 = -2; dx2 <= 2 && !rotor; dx2++)
+      for (let y = surf; y < Math.min(LY-1, surf+4); y++) {
+        const xx = lx+dx2, zz = lz+dz2;
+        if (xx < 1 || xx >= LX-1 || zz < 1 || zz >= LZ-1) continue;
+        const i = xx + LX*(y + LY*zz);
+        if (!solid3[i] && (VX[i]*wnx + VZ[i]*wnz) < -0.03*wm) { rotor = true; break; }
+      }
+    const liftFt = top > surf ? Math.round((top - surf)*cellM*3.281) : 0;
+    const ico = m.kind === 'lz' ? '🟩' : m.kind === 'launch' ? '🟧' : '🟦';
+    html += `${ico} <b style="color:#dbe2ee">${m.name}</b>: ${wind.toFixed(0)} mph` +
+      (liftFt > 0 ? ` · lift to ~${liftFt} ft AGL (max +${maxW.toFixed(1)} m/s)` : ' · no soarable lift') +
+      (rotor ? ' · <span style="color:#ff5ad2">rotor nearby ⚠</span>' : ' · <span style="color:#5fc3ff">clean ✓</span>') +
+      (wind > 22 ? ' · <span style="color:#ffab5f">strong — blow-back risk!</span>' : '') + '<br>';
+  }
+  el.innerHTML = html;
 }
 
 /* ============================================================
@@ -496,22 +921,34 @@ function simulate3() {
   if (computing) return;
   if (category === 'terrain' && !terra) { toast('Load a terrain location first.'); return; }
   invalidate();
-  /* lattice setup */
+  const G = gran();
   if (category === 'terrain') {
-    LX = 64; LZ = 64;
+    LX = G.tHoriz; LZ = G.tHoriz;
     const cellM = terra.extentM/LX;
-    LY = Math.max(16, Math.min(32, Math.ceil((terra.hRange*1.4 + 250)/cellM)));
+    LY = Math.max(14, Math.min(40, Math.ceil((terra.hRange*1.4 + 250)/cellM)));
     sceneScale = cellM; sceneOffX = -terra.extentM/2; sceneOffZ = -terra.extentM/2;
   } else {
-    LX = 72; LY = 32; LZ = 48;
+    LX = G.sx; LY = G.sy; LZ = G.sz;
+    CELL = DX/LX;
     sceneScale = CELL; sceneOffX = -DX/2; sceneOffZ = -DZ/2;
+  }
+  /* logarithmic wind-gradient profile: slider speed = wind at 10 m AGL */
+  {
+    const stepM = category === 'terrain' ? terra.extentM/LX : CELL*0.3048;
+    const z0 = 0.05, ln0 = Math.log(10/z0);
+    FAC = new Float32Array(LY);
+    for (let y = 0; y < LY; y++) {
+      const zm = Math.max(0.6, (y + 0.5)*stepM);
+      FAC[y] = Math.min(1.6, Math.max(0.25, Math.log(zm/z0)/ln0));
+    }
   }
   alloc3();
   buildSolid();
   initFluid3();
-  initParticles();
-  ensurePoints();
-  frames = []; playing = false; playT = 0;
+  buildArrowField();
+  ensureArrowObject();
+  lineObj.visible = true;
+  frames = []; rotorVols = []; playing = false; playT = 0;
   $('st3grid').textContent = `${LX}×${LY}×${LZ} (${Math.round(N3/1000)}k cells)`;
   const total = category === 'terrain' ? 360 : 440;
   const SAMPLE = 4;
@@ -525,7 +962,6 @@ function simulate3() {
     while (performance.now() < budget && step < total) {
       const t0 = performance.now();
       lbm3Step();
-      advect();
       msSum += performance.now() - t0; msN++;
       if (step % SAMPLE === 0) recordFrame();
       step++;
@@ -546,23 +982,31 @@ function simulate3() {
     computing = false;
     lock(false);
     if (cancelled && frames.length < 10) {
-      frames = []; $('st3state').textContent = 'cancelled';
-      if (pointsObj) pointsObj.visible = false;
+      frames = []; rotorVols = [];
+      $('st3state').textContent = 'cancelled';
+      if (lineObj) lineObj.visible = false;
       return;
     }
     playing = true; playT = 0;
     $('st3state').textContent = cancelled ? 'playing (partial)' : 'playing animation';
-    toast(`3D CFD done — looping ${frames.length} recorded frames.`);
+    buildLiftBand();
+    buildSlice();
+    updateVerdicts();
+    toast(`3D CFD done — green = lift band (soarable), magenta arrows = rotor.`);
   };
   requestAnimationFrame(chunk);
 }
 function lock(on) {
   $('ov3d').classList.toggle('show', on);
-  for (const id of ['sim3Btn','locGo','cat3Shapes','cat3Terrain','del3']) $(id).disabled = on;
+  for (const id of ['sim3Btn','locGo','cat3Shapes','cat3Terrain','del3','mesh3Res','siteSel','liveWindBtn','sliceSel']) $(id).disabled = on;
 }
-function invalidate() {                        // any edit voids the recorded animation
-  frames = []; playing = false;
-  if (pointsObj) pointsObj.visible = false;
+function invalidate() {
+  frames = []; rotorVols = []; playing = false;
+  if (lineObj) lineObj.visible = false;
+  clearObj(liftObj); liftObj = null;
+  clearObj(sliceObj); sliceObj = null;
+  $('st3rotor').textContent = '–';
+  $('verdicts').innerHTML = '';
   if ($('st3state').textContent.startsWith('playing')) $('st3state').textContent = 'idle (edited — re-simulate)';
 }
 
@@ -570,6 +1014,7 @@ function invalidate() {                        // any edit voids the recorded an
    UI bindings & pointer controls
    ============================================================ */
 function bindUI() {
+  bindAutocomplete();
   for (const pal of document.querySelectorAll('.pal3d'))
     pal.addEventListener('click', () => { if (category === 'shapes') addObj3(pal.dataset.obj); });
   for (const id of ['t3px','t3py','t3pz','t3rx','t3ry','t3rz','t3sx','t3sy','t3sz'])
@@ -581,41 +1026,66 @@ function bindUI() {
     select3(null);
     invalidate();
   });
-  $('cat3Shapes').addEventListener('click', () => setCategory('shapes'));
-  $('cat3Terrain').addEventListener('click', () => setCategory('terrain'));
-  $('locGo').addEventListener('click', () => { if (!computing) loadTerrain($('locName').value.trim() || 'Mussel Rock'); });
-  $('locName').addEventListener('keydown', e => { if (e.key === 'Enter') $('locGo').click(); });
+  $('cat3Shapes').addEventListener('click', () => { if (!computing) setCategory('shapes'); });
+  $('cat3Terrain').addEventListener('click', () => { if (!computing) setCategory('terrain'); });
+  $('locGo').addEventListener('click', async () => {
+    if (computing) return;
+    if (chosenLoc) { loadTerrainAt(chosenLoc); return; }
+    const q = $('locName').value.trim() || 'Mussel Rock';
+    $('terrStatus').textContent = 'Searching "' + q + '"…';
+    const loc = await geocode(q);
+    if (!loc) { $('terrStatus').textContent = 'Location not found. Try another name.'; return; }
+    loadTerrainAt(loc);
+  });
+  $('mesh3Res').addEventListener('input', () => {
+    invalidate();
+    const G = gran();
+    $('st3grid').textContent = category === 'terrain'
+      ? `${G.tHoriz}×~24×${G.tHoriz} (next run)`
+      : `${G.sx}×${G.sy}×${G.sz} (next run)`;
+  });
+  /* pilot tools */
+  $('siteSel').addEventListener('input', () => { if (!computing && $('siteSel').value) loadSite($('siteSel').value); });
+  $('liveWindBtn').addEventListener('click', () => { if (!computing) liveWind(); });
+  $('sinkRate').addEventListener('input', () => {
+    $('sinkVal').textContent = (+$('sinkRate').value).toFixed(2) + ' m/s';
+    if (frames.length) { buildLiftBand(); buildSlice(); updateVerdicts(); }
+  });
+  $('showLift').addEventListener('input', () => { if (liftObj) liftObj.visible = $('showLift').checked; });
+  $('sliceSel').addEventListener('input', () => { if (frames.length) buildSlice(); });
+  const dirLabel = () => {
+    const D = Math.round(compassFrom(parseFloat($('dir3').value)));
+    $('dir3Val').textContent = `from ${D}° ${DIRN[Math.round(D/45) % 8]}`;
+  };
   $('dir3').addEventListener('input', () => {
-    $('dir3Val').textContent = $('dir3').value + '°';
+    dirLabel();
     const a = parseFloat($('dir3').value)*Math.PI/180;
     windArrow.setDirection(new THREE.Vector3(Math.cos(a), 0, Math.sin(a)));
     invalidate();
   });
+  dirLabel();
   $('spd3').addEventListener('input', () => {
     $('spd3Val').textContent = $('spd3').value + ' MPH';
-    windArrow.setLength(3 + mph3()*0.25, 2, 1.2);
     invalidate();
   });
   $('sim3Btn').addEventListener('click', simulate3);
   $('stop3Btn').addEventListener('click', () => {
     if (computing) { cancelReq = true; return; }
     playing = false;
-    if (pointsObj) pointsObj.visible = false;
+    if (lineObj) lineObj.visible = false;
     $('st3state').textContent = 'idle';
   });
   $('ovCancel').addEventListener('click', () => { cancelReq = true; });
-  /* camera buttons */
-  const A = 0.12;
-  $('cYawL').addEventListener('click', () => camYaw(A));
-  $('cYawR').addEventListener('click', () => camYaw(-A));
-  $('cPitchU').addEventListener('click', () => camPitch(A));
-  $('cPitchD').addEventListener('click', () => camPitch(-A));
-  $('cRollL').addEventListener('click', () => camRoll(A));
-  $('cRollR').addEventListener('click', () => camRoll(-A));
+  const Aang = 0.12;
+  $('cYawL').addEventListener('click', () => camYaw(Aang));
+  $('cYawR').addEventListener('click', () => camYaw(-Aang));
+  $('cPitchU').addEventListener('click', () => camPitch(Aang));
+  $('cPitchD').addEventListener('click', () => camPitch(-Aang));
+  $('cRollL').addEventListener('click', () => camRoll(Aang));
+  $('cRollR').addEventListener('click', () => camRoll(-Aang));
   $('cIn').addEventListener('click', () => camMove(0, 0, -moveStep()*2));
   $('cOut').addEventListener('click', () => camMove(0, 0, moveStep()*2));
   $('cHome').addEventListener('click', () => camGoHome(false));
-  /* keyboard */
   window.addEventListener('keydown', e => {
     if (!document.body.classList.contains('mode-3d')) return;
     if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
@@ -712,7 +1182,6 @@ function bindUI() {
   }, {passive: false});
 }
 function setCategory(cat) {
-  if (computing) return;
   category = cat;
   $('cat3Shapes').classList.toggle('active', cat === 'shapes');
   $('cat3Terrain').classList.toggle('active', cat === 'terrain');
@@ -722,9 +1191,7 @@ function setCategory(cat) {
   terrainGroup.visible = cat === 'terrain';
   select3(null);
   invalidate();
-  if (cat === 'terrain' && terra) camGoHome(true);
-  if (cat === 'shapes') camGoHome(true);
-  /* wind arrow anchor */
+  camGoHome(true);
   if (cat === 'terrain' && terra) {
     windArrow.position.set(-terra.extentM/2, terra.hRange*1.3, -terra.extentM/2);
     windArrow.setLength(terra.extentM*0.08, terra.extentM*0.02, terra.extentM*0.012);
