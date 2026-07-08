@@ -979,7 +979,7 @@ function simulate3() {
     const remain = (total - step)*msStep/1000;
     $('pfill').style.width = (step/total*100).toFixed(1) + '%';
     $('ovEta').textContent = `step ${step} / ${total} · ${msStep.toFixed(1)} ms/step · ~${Math.max(0, remain).toFixed(0)}s remaining`;
-    if (step < total) requestAnimationFrame(chunk);
+    if (step < total) setTimeout(chunk, 0);   // setTimeout (not rAF): keeps computing in background tabs
     else finish(false);
   };
   const finish = (cancelled) => {
@@ -998,7 +998,7 @@ function simulate3() {
     updateVerdicts();
     toast(`3D CFD done — green = lift band (soarable), magenta arrows = rotor.`);
   };
-  requestAnimationFrame(chunk);
+  setTimeout(chunk, 0);
 }
 function lock(on) {
   $('ov3d').classList.toggle('show', on);
