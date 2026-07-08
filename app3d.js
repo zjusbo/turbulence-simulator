@@ -328,21 +328,21 @@ async function loadTerrainAt(loc) {
     const t2lat = yy => Math.atan(Math.sinh(Math.PI*(1 - 2*yy/n2)))*180/Math.PI;
     let n, hg, demSrc;
     try {
-      if (typeof GeoTIFF === 'undefined') throw new Error('geotiff lib not loaded');
+      if (typeof Lerc === 'undefined') throw new Error('lerc lib not loaded');
+      if (Lerc.load) await Lerc.load();
       n = 513;                                     // ~7.6 m grid from 1 m source
       const url3dep = `https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage` +
         `?bbox=${t2lon(x0)},${t2lat(y0+2)},${t2lon(x0+2)},${t2lat(y0)}&bboxSR=4326&imageSR=4326` +
-        `&size=${n},${n}&format=tiff&pixelType=F32&noDataInterpretation=esriNoDataMatchAny` +
+        `&size=${n},${n}&format=lerc&pixelType=F32&noDataInterpretation=esriNoDataMatchAny` +
         `&interpolation=RSP_BilinearInterpolation&f=image`;
       let buf = null;                              // USGS service can fail on cold start — retry
       for (let att = 0; att < 3 && !buf; att++) {
         try { buf = await (await fetch(url3dep)).arrayBuffer(); }
         catch (efetch) { if (att === 2) throw efetch; await new Promise(rs => setTimeout(rs, 900)); }
       }
-      const tiff = await GeoTIFF.fromArrayBuffer(buf);
-      const im = await tiff.getImage();
-      const data = (await im.readRasters())[0];
-      if (im.getWidth() !== n || data.length < n*n) throw new Error('unexpected raster');
+      const dec = Lerc.decode(buf);
+      const data = dec.pixels[0];
+      if (dec.width !== n || data.length < n*n) throw new Error('unexpected raster');
       hg = new Float32Array(n*n);
       let valid = 0;
       for (let i = 0; i < n*n; i++) {
