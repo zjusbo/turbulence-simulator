@@ -334,7 +334,11 @@ async function loadTerrainAt(loc) {
         `?bbox=${t2lon(x0)},${t2lat(y0+2)},${t2lon(x0+2)},${t2lat(y0)}&bboxSR=4326&imageSR=4326` +
         `&size=${n},${n}&format=tiff&pixelType=F32&noDataInterpretation=esriNoDataMatchAny` +
         `&interpolation=RSP_BilinearInterpolation&f=image`;
-      const buf = await (await fetch(url3dep)).arrayBuffer();
+      let buf = null;                              // USGS service can fail on cold start — retry
+      for (let att = 0; att < 3 && !buf; att++) {
+        try { buf = await (await fetch(url3dep)).arrayBuffer(); }
+        catch (efetch) { if (att === 2) throw efetch; await new Promise(rs => setTimeout(rs, 900)); }
+      }
       const tiff = await GeoTIFF.fromArrayBuffer(buf);
       const im = await tiff.getImage();
       const data = (await im.readRasters())[0];
